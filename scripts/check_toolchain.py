@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -81,13 +81,29 @@ class UpdateRecommendation:
 
 
 @dataclass
+class OpenCodexDiagnostics:
+    installed_version: Optional[str] = None
+    health: str = "HEALTHY"
+    proxy_running: bool = False
+    proxy_summary: str = "unverified"
+    service_status: str = "unverified"
+    shim_status: str = "unverified"
+    shim_aligned: bool = False
+    runtime_source: str = "unverified"
+    detected_codex: Optional[str] = None
+    catalog_health: str = "unverified"
+    oauth_summary: str = "unverified"
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
 class ToolCheckResult:
     name: str
     installed_version: Optional[str]
     install_method: str
     latest_version: Optional[str]
     latest_source: str
-    status: str  # CURRENT, WATCH, UPDATE, URGENT, UNKNOWN
+    status: str  # Strictly one of: CURRENT, WATCH, UPDATE, URGENT, UNKNOWN
     health: str  # HEALTHY, DEGRADED, UNVERIFIED, NOT_INSTALLED
     attention_notes: List[str] = field(default_factory=list)
     update_recommendation: Optional[UpdateRecommendation] = None
@@ -127,7 +143,7 @@ def redact_secrets(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Safe Network Fetcher & Environment Helpers
+# Safe Network Fetcher & Process Execution
 # ---------------------------------------------------------------------------
 
 class NetworkFetcher:
@@ -157,7 +173,7 @@ class NetworkFetcher:
 
 
 def safe_run_command(args: List[str], timeout: float = 4.0) -> Tuple[int, str, str]:
-    """Run a local command safely with bounded timeout, resolved executable, and no shell."""
+    """Run a command safely with bounded timeout, resolved binary, and no shell."""
     try:
         cmd_name = args[0]
         resolved = shutil.which(cmd_name)
@@ -190,118 +206,28 @@ def safe_read_json(path: Path) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Individual Tool Checkers
+# Toolchain Auditor Implementation
 # ---------------------------------------------------------------------------
 
 class ToolchainAuditor:
-    def __init__(self, fetcher: NetworkFetcher, appdata_roaming: Optional[Path] = None, localappdata: Optional[Path] = None, user_home: Optional[Path] = None):
+    def __init__(
+        self,
+        fetcher: NetworkFetcher,
+        appdata_roaming: Optional[Path] = None,
+        localappdata: Optional[Path] = None,
+        user_home: Optional[Path] = None,
+        command_runner: Optional[Callable[[List[str], float], Tuple[int, str, str]]] = None,
+    ):
         self.fetcher = fetcher
         self.user_home = user_home or Path(os.environ.get("USERPROFILE", os.path.expanduser("~")))
         self.appdata_roaming = appdata_roaming or Path(os.environ.get("APPDATA", str(self.user_home / "AppData" / "Roaming")))
         self.localappdata = localappdata or Path(os.environ.get("LOCALAPPDATA", str(self.user_home / "AppData" / "Local")))
         self.npm_global_root = self.appdata_roaming / "npm" / "node_modules"
+        self.run_cmd = command_runner or safe_run_command
         self.observer_degraded = False
 
-    # 1. Codex CLI
-    def check_codex_cli(self, opencodex_version: Optional[str] = None) -> ToolCheckResult:
-        name = "Codex CLI"
-        installed_version = None
-        install_method = "npm (@openai/codex)"
-        latest_version = None
-        latest_source = "npm registry (@openai/codex)"
-        health = "HEALTHY"
-        attention: List[str] = []
-        rec: Optional[UpdateRecommendation] = None
-
-        pkg_path = self.npm_global_root / "@openai" / "codex" / "package.json"
-        pkg_data = safe_read_json(pkg_path)
-        if pkg_data and "version" in pkg_data:
-            installed_version = str(pkg_data["version"])
-        else:
-            rc, stdout, _ = safe_run_command(["codex", "--version"], timeout=2.0)
-            if rc == 0 and stdout:
-                m = re.search(r"(\d+\.\d+\.\d+)", stdout)
-                if m:
-                    installed_version = m.group(1)
-
-        rc_doc, stdout_doc, _ = safe_run_command(["codex", "doctor", "--json"], timeout=4.0)
-        if rc_doc == 0 and stdout_doc:
-            try:
-                doc_json = json.loads(stdout_doc)
-                checks = doc_json.get("checks", {})
-                runtime_chk = checks.get("runtime.install_method", {}).get("status")
-                install_chk = checks.get("install.consistent", {}).get("status")
-                if runtime_chk == "fail" or install_chk == "fail":
-                    health = "DEGRADED"
-                    attention.append("Codex Doctor reported inconsistent runtime or install state")
-            except Exception:
-                pass
-        elif rc_doc not in (0, 127):
-            self.observer_degraded = True
-
-        if not installed_version:
-            return ToolCheckResult(
-                name=name,
-                installed_version=None,
-                install_method="unknown",
-                latest_version=None,
-                latest_source=latest_source,
-                status="UNKNOWN",
-                health="NOT_INSTALLED",
-                attention_notes=["Codex CLI executable or package not found in global npm root"],
-            )
-
-        latest_data = self.fetcher.fetch_json("https://registry.npmjs.org/@openai/codex/latest")
-        if latest_data and isinstance(latest_data, dict) and "version" in latest_data:
-            latest_version = str(latest_data["version"])
-        else:
-            cache_file = self.user_home / ".codex" / "version.json"
-            cache_data = safe_read_json(cache_file)
-            if cache_data and "latest_version" in cache_data and cache_data["latest_version"]:
-                latest_version = str(cache_data["latest_version"])
-                last_chk = cache_data.get("last_checked_at", "recently")
-                latest_source = f"local codex version.json cache ({last_chk[:10]})"
-            else:
-                latest_source = "npm registry (unreachable)"
-                latest_version = None
-
-        v_inst = SemVer.parse(installed_version)
-        v_lat = SemVer.parse(latest_version)
-
-        if not v_lat:
-            status = "UNKNOWN"
-        elif v_inst and v_lat and v_inst.compare(v_lat) < 0:
-            status = "UPDATE"
-            rec = UpdateRecommendation(
-                why=f"Newer stable release {latest_version} available (current: {installed_version})",
-                breaking_relevance="Updating via npm will overwrite OpenCodex autostart shims; re-run 'ocx codex-shim install' post-update.",
-                install_method=install_method,
-                proposed_command=f"npm install -g @openai/codex@{latest_version}",
-                rollback_command=f"npm install -g @openai/codex@{installed_version}",
-                validation_checks=[
-                    "codex --version",
-                    "codex doctor",
-                    "ocx codex-shim status",
-                    "Invoke-RestMethod http://127.0.0.1:10100/healthz",
-                ],
-            )
-        else:
-            status = "CURRENT"
-
-        return ToolCheckResult(
-            name=name,
-            installed_version=installed_version,
-            install_method=install_method,
-            latest_version=latest_version or "unknown",
-            latest_source=latest_source,
-            status=status,
-            health=health,
-            attention_notes=attention,
-            update_recommendation=rec,
-        )
-
-    # 2. OpenCodex
-    def check_opencodex(self) -> ToolCheckResult:
+    # 1. OpenCodex Full Diagnostic Check
+    def check_opencodex(self) -> Tuple[ToolCheckResult, OpenCodexDiagnostics]:
         name = "OpenCodex"
         installed_version = None
         install_method = "npm (@bitkyc08/opencodex)"
@@ -311,31 +237,99 @@ class ToolchainAuditor:
         attention: List[str] = []
         rec: Optional[UpdateRecommendation] = None
 
-        pkg_path = self.npm_global_root / "@bitkyc08" / "opencodex" / "package.json"
-        pkg_data = safe_read_json(pkg_path)
-        if pkg_data and "version" in pkg_data:
-            installed_version = str(pkg_data["version"])
-        else:
-            rc, stdout, _ = safe_run_command(["ocx", "--version"], timeout=2.0)
-            if rc == 0 and stdout:
-                m = re.search(r"(\d+\.\d+\.\d+)", stdout)
-                if m:
-                    installed_version = m.group(1)
+        diag = OpenCodexDiagnostics()
 
-        proxy_live = False
+        # Version check via CLI then package.json fallback
+        rc_v, out_v, _ = self.run_cmd(["ocx", "--version"], 3.0)
+        if rc_v == 0 and out_v:
+            m = re.search(r"(\d+\.\d+\.\d+)", out_v)
+            if m:
+                installed_version = m.group(1)
+
+        if not installed_version:
+            pkg_path = self.npm_global_root / "@bitkyc08" / "opencodex" / "package.json"
+            pkg_data = safe_read_json(pkg_path)
+            if pkg_data and "version" in pkg_data:
+                installed_version = str(pkg_data["version"])
+
+        diag.installed_version = installed_version
+
+        # ocx health & status checks
+        rc_h, out_h, err_h = self.run_cmd(["ocx", "health"], 4.0)
+        diag.raw_health_output = out_h
+
+        rc_s, out_s, err_s = self.run_cmd(["ocx", "status"], 4.0)
+
+        # HTTP healthz probe
+        probe_live = False
         try:
             req = urllib.request.Request("http://127.0.0.1:10100/healthz", headers={"User-Agent": "ToolchainWatch"})
             with urllib.request.urlopen(req, timeout=1.5) as resp:
                 if resp.status == 200:
                     data = json.loads(resp.read().decode("utf-8"))
                     if data.get("status") == "ok":
-                        proxy_live = True
+                        probe_live = True
         except Exception:
-            proxy_live = False
+            probe_live = False
 
-        if not proxy_live:
+        if probe_live or (rc_h == 0 and "Proxy healthy" in out_h):
+            diag.proxy_running = True
+            diag.proxy_summary = "running (port 10100, healthz verified)"
+        else:
+            diag.proxy_running = False
+            diag.proxy_summary = "unreachable (port 10100)"
             health = "DEGRADED"
-            attention.append("OpenCodex local proxy is not responding on http://127.0.0.1:10100/healthz")
+            attention.append("OpenCodex local proxy is unreachable on port 10100")
+
+        if out_s:
+            m_codex = re.search(r"Codex version:\s*([0-9.]+)", out_s)
+            if m_codex:
+                diag.detected_codex = m_codex.group(1)
+
+            m_srv = re.search(r"Service:\s*([^\r\n]+)", out_s)
+            if m_srv:
+                diag.service_status = m_srv.group(1).strip()
+
+            m_shim = re.search(r"Codex autostart shim:\s*([^\r\n]+)", out_s)
+            if m_shim:
+                shim_line = m_shim.group(1).strip()
+                diag.shim_status = shim_line
+                if "not an opencodex shim" in shim_line or "wrapper present" in shim_line:
+                    diag.shim_aligned = False
+                    attention.append("OpenCodex autostart shim is bypassed by standard npm wrapper (run 'ocx codex-shim install' after updates)")
+                else:
+                    diag.shim_aligned = True
+            else:
+                diag.shim_status = "unverified"
+                diag.shim_aligned = False
+
+            m_rt = re.search(r"Runtime source:\s*([^\r\n]+)", out_s)
+            if m_rt:
+                diag.runtime_source = m_rt.group(1).strip()
+
+            m_clamp = re.search(r"Catalog clamp:\s*([^\r\n]+)", out_s)
+            m_plug = re.search(r"Codex bundled plugins:\s*([^\r\n]+)", out_s)
+            clamp_val = m_clamp.group(1).strip() if m_clamp else "unknown"
+            plug_val = m_plug.group(1).strip() if m_plug else "unknown"
+            diag.catalog_health = f"clamp: {clamp_val}; plugins: {plug_val}"
+
+            m_oauth = re.search(r"OAuth logins:(.*?)(?:\n\d+\s*\||\n\s*EPERM|\Z)", out_s, re.DOTALL)
+            if m_oauth:
+                login_items: List[str] = []
+                for line in m_oauth.group(1).strip().splitlines():
+                    line = line.strip()
+                    if line and not any(k in line.lower() for k in ["token", "key", "secret", "password"]):
+                        login_items.append(line)
+                diag.oauth_summary = f"{len(login_items)} provider(s) checked, zero credentials exposed"
+        else:
+            if rc_s != 0:
+                self.observer_degraded = True
+                diag.warnings.append("ocx status command failed or was restricted in sandbox")
+
+        combined_err = f"{err_h} {err_s}"
+        if "EPERM" in combined_err or "permission denied" in combined_err.lower():
+            self.observer_degraded = True
+            diag.warnings.append("Sandbox permission boundary encountered for user-restricted files (.opencodex auth/lock)")
 
         if not installed_version:
             return ToolCheckResult(
@@ -347,7 +341,7 @@ class ToolchainAuditor:
                 status="UNKNOWN",
                 health="NOT_INSTALLED",
                 attention_notes=["OpenCodex package or CLI not found"],
-            )
+            ), diag
 
         latest_data = self.fetcher.fetch_json("https://registry.npmjs.org/@bitkyc08/opencodex/latest")
         if latest_data and isinstance(latest_data, dict) and "version" in latest_data:
@@ -365,16 +359,161 @@ class ToolchainAuditor:
             status = "UPDATE"
             rec = UpdateRecommendation(
                 why=f"Newer stable release {latest_version} available (current: {installed_version})",
-                breaking_relevance="Ensure active provider configurations and model routing compatibility before upgrading.",
+                breaking_relevance="Verify provider routing compatibility and model catalog preservation before upgrading.",
                 install_method=install_method,
                 proposed_command=f"npm install -g @bitkyc08/opencodex@{latest_version}",
                 rollback_command=f"npm install -g @bitkyc08/opencodex@{installed_version}",
                 validation_checks=[
                     "ocx --version",
-                    "ocx status",
+                    "ocx health",
+                    "ocx status (verify Codex version detection, shim status, provider/OAuth, and model-catalog clamp)",
                     "Invoke-RestMethod http://127.0.0.1:10100/healthz",
                 ],
             )
+        else:
+            status = "CURRENT"
+
+        diag.health = health
+        return ToolCheckResult(
+            name=name,
+            installed_version=installed_version,
+            install_method=install_method,
+            latest_version=latest_version or "unknown",
+            latest_source=latest_source,
+            status=status,
+            health=health,
+            attention_notes=attention,
+            update_recommendation=rec,
+        ), diag
+
+    # 2. Codex CLI (Coupled with OpenCodex)
+    def check_codex_cli(self, ocx_diag: Optional[OpenCodexDiagnostics] = None) -> ToolCheckResult:
+        name = "Codex CLI"
+        installed_version = None
+        install_method = "unknown"
+        latest_version = None
+        latest_source = "npm registry (@openai/codex)"
+        health = "HEALTHY"
+        attention: List[str] = []
+        rec: Optional[UpdateRecommendation] = None
+
+        pkg_path = self.npm_global_root / "@openai" / "codex" / "package.json"
+        pkg_data = safe_read_json(pkg_path)
+        if pkg_data and "version" in pkg_data:
+            installed_version = str(pkg_data["version"])
+            install_method = "npm (@openai/codex)"
+        else:
+            codex_bin = shutil.which("codex")
+            if codex_bin:
+                if "WindowsApps" in codex_bin:
+                    install_method = f"Windows App package ({codex_bin})"
+                else:
+                    install_method = f"binary ({codex_bin})"
+            rc, stdout, _ = self.run_cmd(["codex", "--version"], 2.0)
+            if rc == 0 and stdout:
+                m = re.search(r"(\d+\.\d+\.\d+)", stdout)
+                if m:
+                    installed_version = m.group(1)
+
+        rc_doc, stdout_doc, _ = self.run_cmd(["codex", "doctor", "--json"], 4.0)
+        if rc_doc == 0 and stdout_doc:
+            try:
+                doc_json = json.loads(stdout_doc)
+                checks = doc_json.get("checks", {})
+                runtime_chk = checks.get("runtime.install_method", {}).get("status")
+                install_chk = checks.get("install.consistent", {}).get("status")
+                if runtime_chk == "fail" or install_chk == "fail":
+                    health = "DEGRADED"
+                    attention.append("Codex Doctor reported inconsistent runtime or install state")
+            except Exception:
+                health = "UNVERIFIED"
+                self.observer_degraded = True
+                attention.append("Codex Doctor output could not be parsed as valid JSON")
+        else:
+            health = "UNVERIFIED"
+            self.observer_degraded = True
+
+        if not installed_version:
+            return ToolCheckResult(
+                name=name,
+                installed_version=None,
+                install_method=install_method,
+                latest_version=None,
+                latest_source=latest_source,
+                status="UNKNOWN",
+                health="NOT_INSTALLED",
+                attention_notes=["Codex CLI executable or package not found"],
+            )
+
+        latest_data = self.fetcher.fetch_json("https://registry.npmjs.org/@openai/codex/latest")
+        if latest_data and isinstance(latest_data, dict) and "version" in latest_data:
+            latest_version = str(latest_data["version"])
+        else:
+            latest_version = None
+            latest_source = "npm registry (unreachable)"
+
+        cache_file = self.user_home / ".codex" / "version.json"
+        cache_data = safe_read_json(cache_file)
+        if cache_data and "latest_version" in cache_data and cache_data["latest_version"]:
+            cached_ver = str(cache_data["latest_version"])
+            last_chk = str(cache_data.get("last_checked_at", ""))[:10]
+            attention.append(f"Local Codex version.json cache recorded {cached_ver} on {last_chk} (informational; live registry check required for verdict)")
+
+        v_inst = SemVer.parse(installed_version)
+        v_lat = SemVer.parse(latest_version)
+
+        if not v_lat:
+            status = "UNKNOWN"
+        elif v_inst and v_lat and v_inst.compare(v_lat) < 0:
+            ocx_risky = False
+            risk_reasons: List[str] = []
+            if not ocx_diag:
+                ocx_risky = True
+                risk_reasons.append("OpenCodex diagnostics unavailable")
+            else:
+                if not ocx_diag.proxy_running:
+                    ocx_risky = True
+                    risk_reasons.append("OpenCodex proxy is not running")
+                if not ocx_diag.shim_aligned:
+                    ocx_risky = True
+                    risk_reasons.append("OpenCodex autostart shim is currently bypassed")
+                if ocx_diag.health != "HEALTHY":
+                    ocx_risky = True
+                    risk_reasons.append(f"OpenCodex health is {ocx_diag.health}")
+
+            if ocx_risky:
+                status = "WATCH"
+                attention.append(f"Codex CLI update to {latest_version} held as WATCH: OpenCodex coupling risk ({', '.join(risk_reasons)}). Re-engage shim ('ocx codex-shim install') or coordinate updates.")
+                rec = UpdateRecommendation(
+                    why=f"Newer stable release {latest_version} available (current: {installed_version}) - held as WATCH due to OpenCodex coupling risk",
+                    breaking_relevance=f"Updating Codex CLI via npm overwrites autostart shims (codex.cmd, codex.ps1). Coupling risk: {', '.join(risk_reasons)}.",
+                    install_method=install_method,
+                    proposed_command=f"npm install -g @openai/codex@{latest_version}",
+                    rollback_command=f"npm install -g @openai/codex@{installed_version}",
+                    validation_checks=[
+                        "codex --version",
+                        "codex doctor",
+                        "ocx codex-shim status (verify shim alignment)",
+                        "ocx status (verify model catalog preservation & clamp status)",
+                        "Invoke-RestMethod http://127.0.0.1:10100/healthz (verify proxy health)",
+                    ],
+                )
+            else:
+                status = "UPDATE"
+                rec = UpdateRecommendation(
+                    why=f"Newer stable release {latest_version} available (current: {installed_version})",
+                    breaking_relevance="Updating via npm will overwrite OpenCodex autostart shims; re-run 'ocx codex-shim install' post-update.",
+                    install_method=install_method,
+                    proposed_command=f"npm install -g @openai/codex@{latest_version}",
+                    rollback_command=f"npm install -g @openai/codex@{installed_version}",
+                    validation_checks=[
+                        "codex --version",
+                        "codex doctor",
+                        "ocx codex-shim status (verify shim alignment)",
+                        "ocx status (verify model catalog preservation & clamp status)",
+                        "Invoke-RestMethod http://127.0.0.1:10100/healthz (verify proxy health)",
+                    ],
+                )
         else:
             status = "CURRENT"
 
@@ -429,41 +568,24 @@ class ToolchainAuditor:
             runtime_type="app_package",
         )
 
-    # 4. OpenCodex Proxy / Shims
-    def check_opencodex_proxy_shims(self) -> ToolCheckResult:
+    # 4. OpenCodex Proxy / Shims Summary Component
+    def check_opencodex_proxy_shims(self, diag: OpenCodexDiagnostics) -> ToolCheckResult:
         name = "OpenCodex proxy/shims"
-        installed_version = "active"
+        installed_version = "active" if diag.proxy_running else "inactive"
         install_method = "npm bin wrappers + local background service"
         latest_version = "n/a"
         latest_source = "local service / shim alignment"
-        health = "HEALTHY"
+        health = "HEALTHY" if diag.proxy_running else "DEGRADED"
         status = "CURRENT"
         attention: List[str] = []
 
-        proxy_live = False
-        try:
-            req = urllib.request.Request("http://127.0.0.1:10100/healthz", headers={"User-Agent": "ToolchainWatch"})
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                if resp.status == 200:
-                    proxy_live = True
-        except Exception:
-            proxy_live = False
-
-        if not proxy_live:
-            health = "DEGRADED"
+        if not diag.proxy_running:
             status = "WATCH"
-            attention.append("OpenCodex background proxy (port 10100) is unreachable")
+            attention.append("OpenCodex background proxy is not reachable on port 10100")
 
-        real_backup = self.appdata_roaming / "npm" / "codex.opencodex-real.cmd"
-        cmd_wrapper = self.appdata_roaming / "npm" / "codex.cmd"
-        if real_backup.is_file() and cmd_wrapper.is_file():
-            try:
-                content = cmd_wrapper.read_text(encoding="utf-8", errors="ignore")
-                if "opencodex" not in content.lower():
-                    status = "WATCH"
-                    attention.append("Codex autostart shim is bypassed by standard npm wrapper (run 'ocx codex-shim install' to re-engage)")
-            except Exception:
-                pass
+        if not diag.shim_aligned:
+            status = "WATCH"
+            attention.append("Codex autostart shim is bypassed by standard npm wrapper (run 'ocx codex-shim install' to re-engage)")
 
         return ToolCheckResult(
             name=name,
@@ -482,8 +604,8 @@ class ToolchainAuditor:
         name = "Workstation Ops / MCP"
         installed_version = None
         install_method = "local repository (C:\\AI\\workstation-ops-mcp)"
-        latest_version = None
-        latest_source = "local project repository"
+        latest_version = "n/a"
+        latest_source = "local project repository (no remote registry channel declared)"
         health = "HEALTHY"
         status = "CURRENT"
         attention: List[str] = []
@@ -493,10 +615,8 @@ class ToolchainAuditor:
         pkg_data = safe_read_json(pkg_path)
         if pkg_data and "version" in pkg_data:
             installed_version = str(pkg_data["version"])
-            latest_version = installed_version
         else:
             installed_version = "unknown"
-            latest_version = "unknown"
             status = "UNKNOWN"
             health = "DEGRADED"
             attention.append("Workstation Ops package.json not accessible")
@@ -504,6 +624,7 @@ class ToolchainAuditor:
         node_mods = mcp_path / "node_modules"
         if not node_mods.is_dir():
             health = "DEGRADED"
+            status = "WATCH"
             attention.append("workstation-ops-mcp node_modules missing; build dependencies require npm install")
 
         return ToolCheckResult(
@@ -529,7 +650,7 @@ class ToolchainAuditor:
         health = "HEALTHY"
         attention: List[str] = []
 
-        rc, stdout, _ = safe_run_command(["node", "-v"], timeout=2.0)
+        rc, stdout, _ = self.run_cmd(["node", "-v"], 2.0)
         if rc == 0 and stdout:
             installed_version = stdout.lstrip("v")
         else:
@@ -549,8 +670,37 @@ class ToolchainAuditor:
             attention.append(f"Warning: system node resolves to bundled runtime path: {node_bin}")
 
         dist_data = self.fetcher.fetch_json("https://nodejs.org/dist/index.json")
-        if dist_data and isinstance(dist_data, list) and len(dist_data) > 0:
-            latest_version = dist_data[0].get("version", "").lstrip("v")
+        if dist_data and isinstance(dist_data, list):
+            valid_releases = []
+            for item in dist_data:
+                ver = item.get("version", "").lstrip("v")
+                if ver and "-" not in ver:
+                    valid_releases.append(item)
+
+            if valid_releases:
+                inst_sem = SemVer.parse(installed_version)
+                matching_release = None
+                if inst_sem and len(inst_sem.parts) > 0:
+                    inst_major = inst_sem.parts[0]
+                    for r in valid_releases:
+                        r_sem = SemVer.parse(r.get("version", "").lstrip("v"))
+                        if r_sem and r_sem.parts[0] == inst_major:
+                            matching_release = r.get("version", "").lstrip("v")
+                            break
+
+                latest_lts_item = next((r for r in valid_releases if r.get("lts")), None)
+                latest_lts = latest_lts_item.get("version", "").lstrip("v") if latest_lts_item else None
+                latest_current = valid_releases[0].get("version", "").lstrip("v")
+
+                if matching_release:
+                    latest_version = matching_release
+                    latest_source = f"nodejs.org release index (Node {inst_sem.parts[0]} line)"
+                elif latest_lts:
+                    latest_version = latest_lts
+                    latest_source = f"nodejs.org release index (LTS {latest_lts_item.get('lts')})"
+                else:
+                    latest_version = latest_current
+                    latest_source = "nodejs.org release index (current)"
         else:
             latest_source = "nodejs.org (unreachable)"
             latest_version = None
@@ -587,7 +737,7 @@ class ToolchainAuditor:
         health = "HEALTHY"
         attention: List[str] = []
 
-        rc, stdout, _ = safe_run_command(["npm", "-v"], timeout=2.0)
+        rc, stdout, _ = self.run_cmd(["npm", "-v"], 2.0)
         if rc == 0 and stdout:
             installed_version = stdout.strip()
         else:
@@ -631,76 +781,168 @@ class ToolchainAuditor:
             attention_notes=attention,
         )
 
-    # 7. Bun
+    # 7. System Bun vs OpenCodex Bundled Bun
     def check_bun(self) -> Tuple[ToolCheckResult, Optional[ToolCheckResult]]:
         bun_bin = shutil.which("bun")
         sys_result: ToolCheckResult
-        if bun_bin:
-            rc, stdout, _ = safe_run_command(["bun", "-v"], timeout=2.0)
-            ver = stdout.strip() if rc == 0 else "unknown"
-            sys_result = ToolCheckResult(
-                name="Bun (System)",
-                installed_version=ver,
-                install_method=f"System ({bun_bin})",
-                latest_version="unknown",
-                latest_source="GitHub releases (oven-sh/bun)",
-                status="CURRENT",
-                health="HEALTHY",
-                runtime_type="system",
-            )
+
+        rel_data = self.fetcher.fetch_json("https://api.github.com/repos/oven-sh/bun/releases/latest")
+        latest_bun = None
+        latest_source = "GitHub releases (oven-sh/bun)"
+        if rel_data and isinstance(rel_data, dict) and "tag_name" in rel_data:
+            m = re.search(r"(\d+\.\d+\.\d+)", str(rel_data["tag_name"]))
+            if m:
+                latest_bun = m.group(1)
         else:
-            sys_result = ToolCheckResult(
-                name="Bun (System)",
-                installed_version="not installed",
-                install_method="none",
-                latest_version="n/a",
-                latest_source="n/a",
-                status="CURRENT",
-                health="HEALTHY",
-                attention_notes=["System Bun is not installed (optional, OpenCodex uses bundled Bun)"],
-                runtime_type="system",
-            )
+            latest_source = "GitHub releases (unreachable)"
+
+        if bun_bin:
+            rc, stdout, _ = self.run_cmd(["bun", "-v"], 2.0)
+            ver = stdout.strip() if rc == 0 and stdout else None
+            if not ver:
+                sys_result = ToolCheckResult(
+                    name="Bun (System)",
+                    installed_version="unverified",
+                    install_method=f"System ({bun_bin})",
+                    latest_version=latest_bun or "unknown",
+                    latest_source=latest_source,
+                    status="UNKNOWN",
+                    health="UNVERIFIED",
+                    attention_notes=["System Bun binary execution failed or timed out"],
+                    runtime_type="system",
+                )
+            elif not latest_bun:
+                sys_result = ToolCheckResult(
+                    name="Bun (System)",
+                    installed_version=ver,
+                    install_method=f"System ({bun_bin})",
+                    latest_version="unknown",
+                    latest_source=latest_source,
+                    status="UNKNOWN",
+                    health="HEALTHY",
+                    runtime_type="system",
+                )
+            else:
+                v_inst = SemVer.parse(ver)
+                v_lat = SemVer.parse(latest_bun)
+                status = "UPDATE" if (v_inst and v_lat and v_inst.compare(v_lat) < 0) else "CURRENT"
+                sys_result = ToolCheckResult(
+                    name="Bun (System)",
+                    installed_version=ver,
+                    install_method=f"System ({bun_bin})",
+                    latest_version=latest_bun,
+                    latest_source=latest_source,
+                    status=status,
+                    health="HEALTHY",
+                    runtime_type="system",
+                )
+        else:
+            if not latest_bun:
+                sys_result = ToolCheckResult(
+                    name="Bun (System)",
+                    installed_version="not installed",
+                    install_method="none",
+                    latest_version="unknown",
+                    latest_source=latest_source,
+                    status="UNKNOWN",
+                    health="HEALTHY",
+                    attention_notes=["System Bun is not installed; latest version unavailable"],
+                    runtime_type="system",
+                )
+            else:
+                sys_result = ToolCheckResult(
+                    name="Bun (System)",
+                    installed_version="not installed",
+                    install_method="none",
+                    latest_version=latest_bun,
+                    latest_source=latest_source,
+                    status="WATCH",
+                    health="HEALTHY",
+                    attention_notes=["System Bun is not installed (optional, OpenCodex uses bundled Bun)"],
+                    runtime_type="system",
+                )
 
         bundled_bun = self.npm_global_root / "@bitkyc08" / "opencodex" / "node_modules" / "bun" / "bin" / "bun.exe"
         bundled_result: Optional[ToolCheckResult] = None
         if bundled_bun.is_file():
-            rc, stdout, _ = safe_run_command([str(bundled_bun), "-v"], timeout=2.0)
-            b_ver = stdout.strip() if rc == 0 else "1.4.0"
-            bundled_result = ToolCheckResult(
-                name="Bun (OpenCodex bundled)",
-                installed_version=b_ver,
-                install_method=f"Bundled ({bundled_bun})",
-                latest_version="managed by OpenCodex",
-                latest_source="OpenCodex package dependency",
-                status="CURRENT",
-                health="HEALTHY",
-                is_bundled=True,
-                runtime_type="bundled",
-            )
+            rc, stdout, _ = self.run_cmd([str(bundled_bun), "-v"], 2.0)
+            b_ver = None
+            if rc == 0 and stdout:
+                m = re.search(r"(\d+\.\d+\.\d+)", stdout)
+                if m:
+                    b_ver = m.group(1)
+
+            if b_ver:
+                bundled_result = ToolCheckResult(
+                    name="Bun (OpenCodex bundled)",
+                    installed_version=b_ver,
+                    install_method=f"Bundled ({bundled_bun})",
+                    latest_version="managed by OpenCodex",
+                    latest_source="OpenCodex package dependency",
+                    status="CURRENT",
+                    health="HEALTHY",
+                    is_bundled=True,
+                    runtime_type="bundled",
+                )
+            else:
+                bundled_result = ToolCheckResult(
+                    name="Bun (OpenCodex bundled)",
+                    installed_version="unknown",
+                    install_method=f"Bundled ({bundled_bun})",
+                    latest_version="managed by OpenCodex",
+                    latest_source="OpenCodex package dependency",
+                    status="UNKNOWN",
+                    health="UNVERIFIED",
+                    attention_notes=["Bundled Bun binary present but execution or version check failed"],
+                    is_bundled=True,
+                    runtime_type="bundled",
+                )
 
         return sys_result, bundled_result
 
-    # 8. Python
+    # 8. System Python
     def check_system_python(self) -> ToolCheckResult:
         name = "Python"
         py_bin = shutil.which("python") or sys.executable
         install_method = f"System ({py_bin})"
-        installed_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        installed_version = None
         latest_version = None
         latest_source = "python.org / endoflife.date API"
         health = "HEALTHY"
         attention: List[str] = []
+
+        rc_py, out_py, _ = self.run_cmd([py_bin, "-V"], 2.0)
+        if rc_py == 0 and out_py:
+            m = re.search(r"(\d+\.\d+\.\d+)", out_py)
+            if m:
+                installed_version = m.group(1)
+
+        if not installed_version:
+            health = "UNVERIFIED"
+            self.observer_degraded = True
+            return ToolCheckResult(
+                name=name,
+                installed_version="unverified",
+                install_method=install_method,
+                latest_version="unknown",
+                latest_source=latest_source,
+                status="UNKNOWN",
+                health=health,
+                attention_notes=["Python executable -V execution failed or timed out"],
+            )
 
         if "codex-runtimes" in py_bin.lower():
             attention.append(f"Warning: active python resolves to bundled cache runtime: {py_bin}")
 
         eol_data = self.fetcher.fetch_json("https://endoflife.date/api/python.json")
         if eol_data and isinstance(eol_data, list) and len(eol_data) > 0:
-            cycle = f"{sys.version_info.major}.{sys.version_info.minor}"
-            for item in eol_data:
-                if item.get("cycle") == cycle:
-                    latest_version = item.get("latest")
-                    break
+            inst_sem = SemVer.parse(installed_version)
+            if inst_sem and len(inst_sem.parts) >= 2:
+                cycle = f"{inst_sem.parts[0]}.{inst_sem.parts[1]}"
+                for item in eol_data:
+                    if item.get("cycle") == cycle:
+                        latest_version = item.get("latest")
+                        break
             if not latest_version:
                 latest_version = eol_data[0].get("latest")
         else:
@@ -740,7 +982,7 @@ class ToolchainAuditor:
         health = "HEALTHY"
         attention: List[str] = []
 
-        rc, stdout, _ = safe_run_command(["git", "--version"], timeout=2.0)
+        rc, stdout, _ = self.run_cmd(["git", "--version"], 2.0)
         if rc == 0 and stdout:
             m = re.search(r"(\d+\.\d+\.\d+)", stdout)
             if m:
@@ -812,7 +1054,7 @@ class ToolchainAuditor:
                     break
 
         if not installed_version:
-            rc, stdout, _ = safe_run_command(["lms", "version"], timeout=2.0)
+            rc, stdout, _ = self.run_cmd(["lms", "version"], 2.0)
             if rc == 0 and stdout:
                 m = re.search(r"(\d+\.\d+\.\d+)", stdout)
                 if m:
@@ -829,11 +1071,9 @@ class ToolchainAuditor:
         except Exception:
             server_live = False
 
-        if server_live:
-            attention.append("LM Studio local server is ON (port: 1234) and serving models")
-        else:
+        if not server_live:
             health = "DEGRADED"
-            attention.append("LM Studio local server is not active on port 1234")
+            attention.append("LM Studio local inference server is not active on port 1234")
 
         return ToolCheckResult(
             name=name,
@@ -862,7 +1102,7 @@ class ToolchainAuditor:
         if pkg_data and "version" in pkg_data:
             installed_version = str(pkg_data["version"])
         else:
-            rc, stdout, _ = safe_run_command(["wrangler", "--version"], timeout=2.0)
+            rc, stdout, _ = self.run_cmd(["wrangler", "--version"], 2.0)
             if rc == 0 and stdout:
                 m = re.search(r"(\d+\.\d+\.\d+)", stdout)
                 if m:
@@ -925,10 +1165,10 @@ class ToolchainAuditor:
 
         tools: List[ToolCheckResult] = []
 
-        ocx_res = self.check_opencodex()
-        codex_res = self.check_codex_cli(opencodex_version=ocx_res.installed_version)
+        ocx_res, ocx_diag = self.check_opencodex()
+        codex_res = self.check_codex_cli(ocx_diag=ocx_diag)
         desktop_res = self.check_codex_desktop()
-        shims_res = self.check_opencodex_proxy_shims()
+        shims_res = self.check_opencodex_proxy_shims(ocx_diag)
         mcp_res = self.check_workstation_ops()
         node_res = self.check_system_node()
         npm_res = self.check_system_npm()
@@ -956,7 +1196,7 @@ class ToolchainAuditor:
         core_health = "HEALTHY"
         if codex_res.health == "DEGRADED" or ocx_res.health == "DEGRADED" or shims_res.health == "DEGRADED":
             core_health = "DEGRADED"
-        elif self.observer_degraded and codex_res.health != "HEALTHY":
+        elif codex_res.health == "UNVERIFIED" or ocx_res.health == "UNVERIFIED":
             core_health = "UNVERIFIED"
 
         attention: List[str] = []
