@@ -171,6 +171,26 @@ class NetworkFetcher:
         except Exception:
             return None
 
+    def fetch_text(self, url: str) -> Optional[str]:
+        """Fetch text from an authoritative endpoint with the same offline semantics."""
+        if url in self.mock_data:
+            value = self.mock_data[url]
+            return value if isinstance(value, str) else None
+        if self.offline:
+            return None
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Daily-Toolchain-Watch/1.0 (Windows NT)",
+                "Accept": "text/html",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
 
 def safe_run_command(args: List[str], timeout: float = 4.0) -> Tuple[int, str, str]:
     """Run a command safely with bounded timeout, resolved binary, and no shell."""
@@ -604,10 +624,10 @@ class ToolchainAuditor:
         name = "Workstation Ops / MCP"
         installed_version = None
         install_method = "local repository (C:\\AI\\workstation-ops-mcp)"
-        latest_version = "n/a"
+        latest_version = "unknown"
         latest_source = "local project repository (no remote registry channel declared)"
         health = "HEALTHY"
-        status = "CURRENT"
+        status = "UNKNOWN"
         attention: List[str] = []
 
         mcp_path = Path("C:/AI/workstation-ops-mcp")
@@ -907,7 +927,7 @@ class ToolchainAuditor:
         install_method = f"System ({py_bin})"
         installed_version = None
         latest_version = None
-        latest_source = "python.org / endoflife.date API"
+        latest_source = "docs.python.org versioned documentation"
         health = "HEALTHY"
         attention: List[str] = []
 
@@ -934,20 +954,23 @@ class ToolchainAuditor:
         if "codex-runtimes" in py_bin.lower():
             attention.append(f"Warning: active python resolves to bundled cache runtime: {py_bin}")
 
-        eol_data = self.fetcher.fetch_json("https://endoflife.date/api/python.json")
-        if eol_data and isinstance(eol_data, list) and len(eol_data) > 0:
-            inst_sem = SemVer.parse(installed_version)
-            if inst_sem and len(inst_sem.parts) >= 2:
-                cycle = f"{inst_sem.parts[0]}.{inst_sem.parts[1]}"
-                for item in eol_data:
-                    if item.get("cycle") == cycle:
-                        latest_version = item.get("latest")
-                        break
-            if not latest_version:
-                latest_version = eol_data[0].get("latest")
-        else:
-            latest_source = "endoflife.date (unreachable)"
-            latest_version = None
+        inst_sem = SemVer.parse(installed_version)
+        cycle = None
+        if inst_sem and len(inst_sem.parts) >= 2:
+            cycle = f"{inst_sem.parts[0]}.{inst_sem.parts[1]}"
+
+        docs_url = f"https://docs.python.org/{cycle}/" if cycle else None
+        docs_text = self.fetcher.fetch_text(docs_url) if docs_url else None
+        if docs_text and cycle:
+            match = re.search(
+                r"(?:Python\s+)?(\d+\.\d+\.\d+)\s+[Dd]ocumentation",
+                docs_text,
+            )
+            if match and match.group(1).startswith(f"{cycle}."):
+                latest_version = match.group(1)
+                latest_source = f"docs.python.org/{cycle} official documentation"
+        if not latest_version:
+            latest_source = f"docs.python.org/{cycle} (unreachable or unparseable)" if cycle else "docs.python.org (cycle unavailable)"
 
         v_inst = SemVer.parse(installed_version)
         v_lat = SemVer.parse(latest_version)
@@ -1325,4 +1348,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

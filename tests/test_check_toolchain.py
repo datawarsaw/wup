@@ -79,6 +79,9 @@ def make_mock_runner(overrides: Optional[Dict[str, Tuple[int, str, str]]] = None
         key = " ".join(args)
         if key in defaults:
             return defaults[key]
+        executable = Path(args[0]).stem.lower()
+        if executable == "python" and args[1:] == ["-V"]:
+            return defaults["python -V"]
         for k, v in defaults.items():
             if k.split()[0] == args[0]:
                 return v
@@ -229,6 +232,21 @@ class TestOfflineUnknownHandling(unittest.TestCase):
         self.assertEqual(py_res.status, "UNKNOWN")
         self.assertEqual(py_res.latest_version, "unknown")
 
+    def test_python_uses_official_cycle_source(self):
+        fetcher = NetworkFetcher(
+            mock_data={
+                "https://docs.python.org/3.10/": "<h1>Python 3.10.20 documentation</h1>",
+            }
+        )
+        auditor = ToolchainAuditor(fetcher=fetcher, command_runner=make_mock_runner())
+
+        result = auditor.check_system_python()
+
+        self.assertEqual(result.installed_version, "3.10.5")
+        self.assertEqual(result.latest_version, "3.10.20")
+        self.assertEqual(result.status, "WATCH")
+        self.assertIn("docs.python.org/3.10", result.latest_source)
+
 
 class TestRuntimeDistinction(unittest.TestCase):
     def test_bundled_vs_system_runtimes(self):
@@ -332,4 +350,3 @@ class TestNoHardcodedDate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

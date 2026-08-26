@@ -17,7 +17,7 @@ This capability is NOT a general Windows package inventory or an autonomous upda
 - **Install Method**: Global npm package (`@openai/codex`) or standalone binary in PATH.
 - **Installed Version Detection**: Package metadata at `%APPDATA%\npm\node_modules\@openai\codex\package.json` or `codex --version`.
 - **Health Verification**: `codex doctor --json` runtime checks (executable resolution, disk space, install consistency). Note that sandbox-induced auth/reachability warnings in offline environments are classified as observer limitations, not host failures.
-- **Latest Stable Source**: Primary: npm registry (`https://registry.npmjs.org/@openai/codex/latest`). Authoritative local cache fallback: `~/.codex/version.json` (tool-native update metadata). If network is unreachable and cache is unavailable, classify latest as `UNKNOWN`.
+- **Latest Stable Source**: Primary: npm registry (`https://registry.npmjs.org/@openai/codex/latest`). `~/.codex/version.json` is informational only and never substitutes for a failed live lookup. If the registry is unreachable, classify latest as `UNKNOWN`.
 - **Coupling & OpenCodex Compatibility**: Codex CLI and OpenCodex are tightly coupled. Upgrading Codex CLI overwrites npm wrappers (`codex.cmd`, `codex.ps1`), which deactivates the OpenCodex autostart shim until re-installed. When OpenCodex shim is unverified or bypassed, hold Codex CLI update as `WATCH` rather than immediately recommending update.
 - **Proposed Update Command**: `npm install -g @openai/codex@<version>`
 - **Rollback Command**: `npm install -g @openai/codex@<installed_version>`
@@ -54,8 +54,8 @@ This capability is NOT a general Windows package inventory or an autonomous upda
 - **Component**: Local workstation operations MCP server.
 - **Install Method**: Local repository at `C:\AI\workstation-ops-mcp`.
 - **Installed Version Detection**: Read from `C:\AI\workstation-ops-mcp\package.json`.
-- **Latest Version Channel**: No external release registry declared (`n/a`).
-- **Classification**: `CURRENT` when local worktree and dependencies are healthy; `WATCH` if build or dependencies require manual attention.
+- **Latest Version Channel**: No reliable external release registry is declared, so latest remains `UNKNOWN`.
+- **Classification**: Report local health separately. Use `UNKNOWN` without a reliable latest channel, or `WATCH` for a verified local health concern.
 
 ### 6. System Node.js & npm
 - **Component**: System-wide JavaScript runtime and package manager.
@@ -74,7 +74,7 @@ This capability is NOT a general Windows package inventory or an autonomous upda
 - **Component**: System Python interpreter.
 - **Separation Rule**: Must remain distinct from application-bundled Python runtimes.
 - **Executable Resolution**: Evaluates resolved system executable (`python -V`), not the auditor process's `sys.version_info`.
-- **Latest Stable Source**: `https://endoflife.date/api/python.json` or `python.org`. If unreachable: `UNKNOWN`.
+- **Latest Stable Source**: The official versioned documentation at `https://docs.python.org/<major.minor>/`, parsed for that maintained cycle's published patch release. If unreachable or unparseable: `UNKNOWN`.
 
 ### 9. Git
 - **Component**: System Git for Windows.

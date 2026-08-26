@@ -41,7 +41,7 @@ Audited in explicit priority order:
 2. **OpenCodex**: `ocx --version`, `ocx health`, `ocx status`, proxy healthz probe, model catalog and OAuth warning sanitization.
 3. **Codex Desktop**: Windows App package (MSIX) version discovery. Latest is classified `UNKNOWN`.
 4. **OpenCodex Proxy & Shims**: Port 10100 service health and npm wrapper vs shim alignment (`codex.cmd` vs `codex.opencodex-real.cmd`).
-5. **Workstation Ops / MCP**: Local `C:\AI\workstation-ops-mcp` repository state; latest declared as `n/a`.
+5. **Workstation Ops / MCP**: Local `C:\AI\workstation-ops-mcp` repository state; latest remains `UNKNOWN` without a declared release channel.
 6. **System Node.js & npm**: Distinguish system runtimes from bundled runtimes; check active LTS/Current.
 7. **Bun**: System Bun (PATH) vs OpenCodex bundled Bun (`bun.exe`).
 8. **System Python**: Resolved system Python interpreter (`python -V`) vs bundled cache Python.
