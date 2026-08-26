@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daily Toolchain Watch"
+  short_description: "Deterministic, read-only AI workstation toolchain health and version auditor"
+  default_prompt: "Use $toolchain-update-watch to perform a read-only audit of workstation AI tools, versions, and runtime health."
