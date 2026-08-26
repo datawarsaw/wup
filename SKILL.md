@@ -12,7 +12,7 @@ Perform deterministic, strictly read-only audits of the core AI workstation tool
 ## Core Principles
 
 1. **Strictly Read-Only:** Never automatically install packages, upgrade dependencies, rewrite configs, modify shims, restart services, or push/merge git changes.
-2. **Coupled Component Awareness:** Treat Codex CLI and OpenCodex as coupled components. An available Codex upgrade is held as `WATCH` if OpenCodex autostart shims are bypassed or proxy health is unverified.
+2. **Coupled Component Awareness:** Treat Codex CLI and OpenCodex as coupled components. An available Codex upgrade is held as `WATCH` if OpenCodex autostart shims, direct proxy health, or the OpenCodex-detected Codex version are unverified or inconsistent with the active CLI.
 3. **No Guessing / Authoritative Lookups:** Use primary sources (npm registry, official GitHub releases, official vendor channels). Network or lookup failures must classify as `UNKNOWN`, never false `CURRENT`.
 4. **Observer Resilience:** Differentiate observer limitations (e.g. sandbox permissions, dumb terminal, offline certificate boundaries) from actual workstation host failures.
 5. **Secret Redaction:** Never output tokens, OAuth sessions, or credentials.

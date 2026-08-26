@@ -85,6 +85,9 @@ class OpenCodexDiagnostics:
     installed_version: Optional[str] = None
     health: str = "HEALTHY"
     proxy_running: bool = False
+    proxy_state: str = "UNVERIFIED"
+    direct_healthz: str = "UNVERIFIED"
+    health_command_summary: str = "unverified"
     proxy_summary: str = "unverified"
     service_status: str = "unverified"
     shim_status: str = "unverified"
@@ -246,6 +249,19 @@ class ToolchainAuditor:
         self.run_cmd = command_runner or safe_run_command
         self.observer_degraded = False
 
+    @staticmethod
+    def _probe_opencodex_healthz() -> bool:
+        """Return True only when a direct HTTP healthz probe verifies the proxy."""
+        try:
+            req = urllib.request.Request("http://127.0.0.1:10100/healthz", headers={"User-Agent": "ToolchainWatch"})
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                if resp.status != 200:
+                    return False
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("status") == "ok"
+        except Exception:
+            return False
+
     # 1. OpenCodex Full Diagnostic Check
     def check_opencodex(self) -> Tuple[ToolCheckResult, OpenCodexDiagnostics]:
         name = "OpenCodex"
@@ -280,26 +296,48 @@ class ToolchainAuditor:
 
         rc_s, out_s, err_s = self.run_cmd(["ocx", "status"], 4.0)
 
-        # HTTP healthz probe
-        probe_live = False
-        try:
-            req = urllib.request.Request("http://127.0.0.1:10100/healthz", headers={"User-Agent": "ToolchainWatch"})
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    if data.get("status") == "ok":
-                        probe_live = True
-        except Exception:
-            probe_live = False
+        # Keep direct HTTP verification distinct from the ocx health report.
+        probe_live = self._probe_opencodex_healthz()
+        health_reports_healthy = rc_h == 0 and "Proxy healthy" in out_h
+        health_reports_unhealthy = rc_h == 0 and any(
+            marker in out_h.lower() for marker in ("proxy unhealthy", "proxy unreachable", "proxy not running")
+        )
 
-        if probe_live or (rc_h == 0 and "Proxy healthy" in out_h):
+        if probe_live:
             diag.proxy_running = True
-            diag.proxy_summary = "running (port 10100, healthz verified)"
+            diag.proxy_state = "HEALTHY"
+            diag.direct_healthz = "VERIFIED"
+            diag.proxy_summary = "running (port 10100; direct healthz verified)"
+        elif health_reports_healthy:
+            diag.proxy_running = True
+            diag.proxy_state = "REPORTED_HEALTHY"
+            diag.health_command_summary = "ocx health reports healthy"
+            diag.proxy_summary = "ocx health reports healthy; direct healthz unverified"
+            health = "UNVERIFIED"
+            self.observer_degraded = True
+            attention.append("OpenCodex proxy is reported healthy by ocx, but the observer could not directly verify healthz")
+        elif health_reports_unhealthy:
+            diag.proxy_running = False
+            diag.proxy_state = "UNHEALTHY"
+            diag.health_command_summary = "ocx health reports unhealthy"
+            diag.proxy_summary = "ocx health reports unhealthy"
+            health = "DEGRADED"
+            attention.append("OpenCodex local proxy is reported unhealthy on port 10100")
         else:
             diag.proxy_running = False
-            diag.proxy_summary = "unreachable (port 10100)"
-            health = "DEGRADED"
-            attention.append("OpenCodex local proxy is unreachable on port 10100")
+            diag.proxy_state = "UNVERIFIED"
+            diag.proxy_summary = "observer unable to verify proxy health"
+            health = "UNVERIFIED"
+            self.observer_degraded = True
+            attention.append("OpenCodex proxy health is unverified because required diagnostics were unavailable or malformed")
+
+        if rc_h == 0 and out_h:
+            if diag.health_command_summary == "unverified":
+                diag.health_command_summary = "ocx health completed"
+        else:
+            health = "UNVERIFIED" if health != "DEGRADED" else health
+            self.observer_degraded = True
+            diag.warnings.append("ocx health command failed or was restricted in sandbox")
 
         if out_s:
             m_codex = re.search(r"Codex version:\s*([0-9.]+)", out_s)
@@ -342,16 +380,36 @@ class ToolchainAuditor:
                         login_items.append(line)
                 diag.oauth_summary = f"{len(login_items)} provider(s) checked, zero credentials exposed"
         else:
-            if rc_s != 0:
-                self.observer_degraded = True
-                diag.warnings.append("ocx status command failed or was restricted in sandbox")
+            health = "UNVERIFIED" if health != "DEGRADED" else health
+            self.observer_degraded = True
+            diag.warnings.append("ocx status command failed or was restricted in sandbox")
+            attention.append("OpenCodex status diagnostics are unavailable or restricted; shim, routing, and catalog evidence is unverified")
+
+        status_evidence_complete = (
+            rc_s == 0
+            and bool(diag.detected_codex)
+            and diag.shim_status != "unverified"
+            and "unknown" not in diag.catalog_health
+            and diag.oauth_summary != "unverified"
+        )
+        if out_s and not status_evidence_complete:
+            health = "UNVERIFIED" if health != "DEGRADED" else health
+            self.observer_degraded = True
+            diag.warnings.append("ocx status output was incomplete, malformed, or restricted")
+            attention.append("OpenCodex status did not provide complete Codex-version, shim, provider/OAuth, and model-catalog evidence")
 
         combined_err = f"{err_h} {err_s}"
         if "EPERM" in combined_err or "permission denied" in combined_err.lower():
             self.observer_degraded = True
+            health = "UNVERIFIED" if health != "DEGRADED" else health
             diag.warnings.append("Sandbox permission boundary encountered for user-restricted files (.opencodex auth/lock)")
 
         if not installed_version:
+            definitely_missing = rc_v == 127
+            result_health = "NOT_INSTALLED" if definitely_missing else "UNVERIFIED"
+            if not definitely_missing:
+                self.observer_degraded = True
+            diag.health = result_health
             return ToolCheckResult(
                 name=name,
                 installed_version=None,
@@ -359,8 +417,12 @@ class ToolchainAuditor:
                 latest_version=None,
                 latest_source=latest_source,
                 status="UNKNOWN",
-                health="NOT_INSTALLED",
-                attention_notes=["OpenCodex package or CLI not found"],
+                health=result_health,
+                attention_notes=[
+                    "OpenCodex package or CLI not found"
+                    if definitely_missing
+                    else "OpenCodex executable version could not be verified; package metadata was unavailable"
+                ],
             ), diag
 
         latest_data = self.fetcher.fetch_json("https://registry.npmjs.org/@bitkyc08/opencodex/latest")
@@ -410,6 +472,7 @@ class ToolchainAuditor:
     def check_codex_cli(self, ocx_diag: Optional[OpenCodexDiagnostics] = None) -> ToolCheckResult:
         name = "Codex CLI"
         installed_version = None
+        package_version = None
         install_method = "unknown"
         latest_version = None
         latest_source = "npm registry (@openai/codex)"
@@ -420,20 +483,36 @@ class ToolchainAuditor:
         pkg_path = self.npm_global_root / "@openai" / "codex" / "package.json"
         pkg_data = safe_read_json(pkg_path)
         if pkg_data and "version" in pkg_data:
-            installed_version = str(pkg_data["version"])
-            install_method = "npm (@openai/codex)"
-        else:
-            codex_bin = shutil.which("codex")
-            if codex_bin:
-                if "WindowsApps" in codex_bin:
-                    install_method = f"Windows App package ({codex_bin})"
-                else:
-                    install_method = f"binary ({codex_bin})"
-            rc, stdout, _ = self.run_cmd(["codex", "--version"], 2.0)
-            if rc == 0 and stdout:
-                m = re.search(r"(\d+\.\d+\.\d+)", stdout)
-                if m:
-                    installed_version = m.group(1)
+            package_version = str(pkg_data["version"])
+
+        codex_bin = shutil.which("codex")
+        if codex_bin:
+            if "WindowsApps" in codex_bin:
+                install_method = f"Windows App package ({codex_bin})"
+            elif package_version:
+                install_method = f"npm (@openai/codex; active executable: {codex_bin})"
+            else:
+                install_method = f"binary ({codex_bin})"
+        elif package_version:
+            install_method = "npm metadata (@openai/codex; active executable unresolved)"
+
+        # The active executable is authoritative; package metadata is supporting evidence only.
+        rc, stdout, _ = self.run_cmd(["codex", "--version"], 2.0)
+        if rc == 0 and stdout:
+            m = re.search(r"(\d+\.\d+\.\d+)", stdout)
+            if m:
+                installed_version = m.group(1)
+
+        package_mismatch = False
+        if installed_version and package_version:
+            active_semver = SemVer.parse(installed_version)
+            package_semver = SemVer.parse(package_version)
+            if active_semver and package_semver and active_semver.compare(package_semver) != 0:
+                package_mismatch = True
+                health = "DEGRADED"
+                attention.append(
+                    f"Active Codex CLI reports {installed_version}, but npm package metadata reports {package_version}; executable/package mismatch"
+                )
 
         rc_doc, stdout_doc, _ = self.run_cmd(["codex", "doctor", "--json"], 4.0)
         if rc_doc == 0 and stdout_doc:
@@ -454,6 +533,11 @@ class ToolchainAuditor:
             self.observer_degraded = True
 
         if not installed_version:
+            definitely_missing = rc == 127 and not codex_bin and not package_version
+            health = "NOT_INSTALLED" if definitely_missing else "UNVERIFIED"
+            detail = "Active Codex CLI executable not found" if definitely_missing else "Active codex --version failed or returned malformed output"
+            if package_version:
+                detail += f"; npm metadata reports {package_version} but is not executable truth"
             return ToolCheckResult(
                 name=name,
                 installed_version=None,
@@ -461,8 +545,8 @@ class ToolchainAuditor:
                 latest_version=None,
                 latest_source=latest_source,
                 status="UNKNOWN",
-                health="NOT_INSTALLED",
-                attention_notes=["Codex CLI executable or package not found"],
+                health=health,
+                attention_notes=[detail],
             )
 
         latest_data = self.fetcher.fetch_json("https://registry.npmjs.org/@openai/codex/latest")
@@ -482,25 +566,44 @@ class ToolchainAuditor:
         v_inst = SemVer.parse(installed_version)
         v_lat = SemVer.parse(latest_version)
 
+        coupling_mismatch = False
+        if ocx_diag and ocx_diag.detected_codex:
+            detected_semver = SemVer.parse(ocx_diag.detected_codex)
+            if v_inst and detected_semver and v_inst.compare(detected_semver) != 0:
+                coupling_mismatch = True
+                health = "DEGRADED"
+                attention.append(
+                    f"Codex/OpenCodex version mismatch: active Codex CLI is {installed_version}, while ocx status detects {ocx_diag.detected_codex}"
+                )
+
+        ocx_risky = False
+        risk_reasons: List[str] = []
+        if not ocx_diag:
+            ocx_risky = True
+            risk_reasons.append("OpenCodex diagnostics unavailable")
+        else:
+            if ocx_diag.proxy_state not in ("HEALTHY",):
+                ocx_risky = True
+                risk_reasons.append(f"OpenCodex proxy evidence is {ocx_diag.proxy_state}")
+            if not ocx_diag.shim_aligned:
+                ocx_risky = True
+                risk_reasons.append("OpenCodex autostart shim is currently bypassed or unverified")
+            if ocx_diag.health != "HEALTHY":
+                ocx_risky = True
+                risk_reasons.append(f"OpenCodex health is {ocx_diag.health}")
+            if not ocx_diag.detected_codex:
+                ocx_risky = True
+                risk_reasons.append("OpenCodex-detected Codex version is unverified")
+        if coupling_mismatch:
+            ocx_risky = True
+            risk_reasons.append("active Codex CLI and ocx-detected Codex versions disagree")
+        if package_mismatch:
+            ocx_risky = True
+            risk_reasons.append("active Codex CLI and npm package metadata disagree")
+
         if not v_lat:
             status = "UNKNOWN"
         elif v_inst and v_lat and v_inst.compare(v_lat) < 0:
-            ocx_risky = False
-            risk_reasons: List[str] = []
-            if not ocx_diag:
-                ocx_risky = True
-                risk_reasons.append("OpenCodex diagnostics unavailable")
-            else:
-                if not ocx_diag.proxy_running:
-                    ocx_risky = True
-                    risk_reasons.append("OpenCodex proxy is not running")
-                if not ocx_diag.shim_aligned:
-                    ocx_risky = True
-                    risk_reasons.append("OpenCodex autostart shim is currently bypassed")
-                if ocx_diag.health != "HEALTHY":
-                    ocx_risky = True
-                    risk_reasons.append(f"OpenCodex health is {ocx_diag.health}")
-
             if ocx_risky:
                 status = "WATCH"
                 attention.append(f"Codex CLI update to {latest_version} held as WATCH: OpenCodex coupling risk ({', '.join(risk_reasons)}). Re-engage shim ('ocx codex-shim install') or coordinate updates.")
@@ -535,7 +638,7 @@ class ToolchainAuditor:
                     ],
                 )
         else:
-            status = "CURRENT"
+            status = "WATCH" if package_mismatch or coupling_mismatch else "CURRENT"
 
         return ToolCheckResult(
             name=name,
@@ -591,17 +694,30 @@ class ToolchainAuditor:
     # 4. OpenCodex Proxy / Shims Summary Component
     def check_opencodex_proxy_shims(self, diag: OpenCodexDiagnostics) -> ToolCheckResult:
         name = "OpenCodex proxy/shims"
-        installed_version = "active" if diag.proxy_running else "inactive"
+        if diag.proxy_state in ("HEALTHY", "REPORTED_HEALTHY"):
+            installed_version = "active"
+        elif diag.proxy_state == "UNHEALTHY":
+            installed_version = "inactive"
+        else:
+            installed_version = "unverified"
         install_method = "npm bin wrappers + local background service"
         latest_version = "n/a"
         latest_source = "local service / shim alignment"
-        health = "HEALTHY" if diag.proxy_running else "DEGRADED"
+        if diag.proxy_state == "UNHEALTHY":
+            health = "DEGRADED"
+        elif diag.health == "HEALTHY" and diag.proxy_state == "HEALTHY":
+            health = "HEALTHY"
+        else:
+            health = "UNVERIFIED"
         status = "CURRENT"
         attention: List[str] = []
 
-        if not diag.proxy_running:
+        if diag.proxy_state == "UNHEALTHY":
             status = "WATCH"
             attention.append("OpenCodex background proxy is not reachable on port 10100")
+        elif diag.proxy_state != "HEALTHY":
+            status = "WATCH"
+            attention.append(f"OpenCodex proxy health is not directly verified ({diag.proxy_summary})")
 
         if not diag.shim_aligned:
             status = "WATCH"
@@ -865,8 +981,7 @@ class ToolchainAuditor:
                     latest_version="unknown",
                     latest_source=latest_source,
                     status="UNKNOWN",
-                    health="HEALTHY",
-                    attention_notes=["System Bun is not installed; latest version unavailable"],
+                    health="NOT_INSTALLED",
                     runtime_type="system",
                 )
             else:
@@ -904,6 +1019,7 @@ class ToolchainAuditor:
                     is_bundled=True,
                     runtime_type="bundled",
                 )
+
             else:
                 bundled_result = ToolCheckResult(
                     name="Bun (OpenCodex bundled)",
@@ -917,6 +1033,12 @@ class ToolchainAuditor:
                     is_bundled=True,
                     runtime_type="bundled",
                 )
+
+        if not bun_bin and bundled_result and bundled_result.health == "HEALTHY":
+            sys_result.status = "UNKNOWN"
+            sys_result.health = "NOT_INSTALLED"
+            sys_result.install_method = "none (optional; bundled Bun in use)"
+            sys_result.attention_notes = []
 
         return sys_result, bundled_result
 
@@ -1235,10 +1357,20 @@ class ToolchainAuditor:
                     f"{t.name}: {rec.proposed_command} (Reason: {rec.why}; Precaution: {rec.breaking_relevance})"
                 )
 
-        if not recommendations:
-            recommendations.append("No immediate updates required. Workstation toolchain is stable.")
-
         observer_status = "DEGRADED" if self.observer_degraded else "NORMAL"
+
+        if not recommendations:
+            unresolved = (
+                observer_status != "NORMAL"
+                or core_health != "HEALTHY"
+                or bool(attention)
+                or any(t.status in ("WATCH", "UPDATE", "URGENT", "UNKNOWN") for t in tools)
+                or any(t.health in ("DEGRADED", "UNVERIFIED") for t in tools)
+            )
+            if unresolved:
+                recommendations.append("No immediate update recommended; unresolved toolchain findings remain.")
+            else:
+                recommendations.append("No immediate updates required. Workstation toolchain is stable.")
 
         return ToolchainAuditReport(
             timestamp=timestamp_str,

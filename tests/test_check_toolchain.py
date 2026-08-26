@@ -12,9 +12,11 @@ from __future__ import annotations
 import datetime
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from unittest.mock import patch
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -90,6 +92,17 @@ def make_mock_runner(overrides: Optional[Dict[str, Tuple[int, str, str]]] = None
     return runner
 
 
+def setUpModule():
+    """Prevent every deterministic test from making even a loopback HTTP call."""
+    global _urlopen_patcher
+    _urlopen_patcher = patch("check_toolchain.urllib.request.urlopen", side_effect=OSError("network disabled in tests"))
+    _urlopen_patcher.start()
+
+
+def tearDownModule():
+    _urlopen_patcher.stop()
+
+
 class TestSemVerCompare(unittest.TestCase):
     def test_semantic_compare(self):
         v1 = SemVer.parse("0.149.0")
@@ -146,9 +159,12 @@ class TestProductionClassification(unittest.TestCase):
             installed_version="2.31.0",
             health="HEALTHY",
             proxy_running=True,
+            proxy_state="HEALTHY",
             shim_aligned=True,
+            detected_codex="0.149.0",
         )
-        res = auditor.check_codex_cli(ocx_diag=healthy_ocx)
+        with patch("check_toolchain.safe_read_json", return_value=None):
+            res = auditor.check_codex_cli(ocx_diag=healthy_ocx)
         self.assertEqual(res.status, "CURRENT")
         self.assertIsNone(res.update_recommendation)
 
@@ -178,10 +194,13 @@ class TestProductionClassification(unittest.TestCase):
             installed_version="2.31.0",
             health="HEALTHY",
             proxy_running=True,
+            proxy_state="HEALTHY",
             shim_aligned=False,
             shim_status="wrapper present but not an opencodex shim",
+            detected_codex="0.149.0",
         )
-        res_held = auditor.check_codex_cli(ocx_diag=bypassed_ocx)
+        with patch("check_toolchain.safe_read_json", return_value=None):
+            res_held = auditor.check_codex_cli(ocx_diag=bypassed_ocx)
         self.assertEqual(res_held.status, "WATCH")
         self.assertTrue(any("OpenCodex coupling risk" in n for n in res_held.attention_notes))
 
@@ -190,9 +209,12 @@ class TestProductionClassification(unittest.TestCase):
             installed_version="2.31.0",
             health="DEGRADED",
             proxy_running=False,
+            proxy_state="UNHEALTHY",
             shim_aligned=True,
+            detected_codex="0.149.0",
         )
-        res_dead = auditor.check_codex_cli(ocx_diag=dead_proxy_ocx)
+        with patch("check_toolchain.safe_read_json", return_value=None):
+            res_dead = auditor.check_codex_cli(ocx_diag=dead_proxy_ocx)
         self.assertEqual(res_dead.status, "WATCH")
         self.assertTrue(any("OpenCodex coupling risk" in n for n in res_dead.attention_notes))
 
@@ -201,10 +223,87 @@ class TestProductionClassification(unittest.TestCase):
             installed_version="2.31.0",
             health="HEALTHY",
             proxy_running=True,
+            proxy_state="HEALTHY",
             shim_aligned=True,
+            detected_codex="0.149.0",
         )
-        res_safe = auditor.check_codex_cli(ocx_diag=safe_ocx)
+        with patch("check_toolchain.safe_read_json", return_value=None):
+            res_safe = auditor.check_codex_cli(ocx_diag=safe_ocx)
         self.assertEqual(res_safe.status, "UPDATE")
+
+    def test_active_codex_executable_is_authoritative_over_package_metadata(self):
+        calls: List[str] = []
+        base_runner = make_mock_runner()
+
+        def recording_runner(args: List[str], timeout: float = 4.0) -> Tuple[int, str, str]:
+            calls.append(" ".join(args))
+            return base_runner(args, timeout)
+
+        fetcher = NetworkFetcher(
+            mock_data={"https://registry.npmjs.org/@openai/codex/latest": {"version": "0.149.1"}}
+        )
+        auditor = ToolchainAuditor(fetcher=fetcher, command_runner=recording_runner)
+        healthy_ocx = OpenCodexDiagnostics(
+            health="HEALTHY",
+            proxy_running=True,
+            proxy_state="HEALTHY",
+            shim_aligned=True,
+            detected_codex="0.149.0",
+        )
+
+        with patch("check_toolchain.shutil.which", return_value=r"C:\Users\test\AppData\Roaming\npm\codex.cmd"), patch(
+            "check_toolchain.safe_read_json",
+            side_effect=[{"version": "0.148.0"}, None],
+        ):
+            result = auditor.check_codex_cli(ocx_diag=healthy_ocx)
+
+        self.assertIn("codex --version", calls)
+        self.assertEqual(result.installed_version, "0.149.0")
+        self.assertEqual(result.status, "WATCH")
+        self.assertEqual(result.health, "DEGRADED")
+        self.assertIn("npm (@openai/codex", result.install_method)
+        self.assertTrue(any("executable/package mismatch" in note for note in result.attention_notes))
+
+    def test_package_metadata_cannot_replace_failed_active_codex_version(self):
+        failed_cli = make_mock_runner({"codex --version": (1, "", "access restricted")})
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=failed_cli)
+        healthy_ocx = OpenCodexDiagnostics(
+            health="HEALTHY",
+            proxy_running=True,
+            proxy_state="HEALTHY",
+            shim_aligned=True,
+            detected_codex="0.149.0",
+        )
+
+        with patch("check_toolchain.shutil.which", return_value=r"C:\Users\test\AppData\Roaming\npm\codex.cmd"), patch(
+            "check_toolchain.safe_read_json", return_value={"version": "0.149.0"}
+        ):
+            result = auditor.check_codex_cli(ocx_diag=healthy_ocx)
+
+        self.assertIsNone(result.installed_version)
+        self.assertEqual(result.status, "UNKNOWN")
+        self.assertEqual(result.health, "UNVERIFIED")
+        self.assertTrue(any("not executable truth" in note for note in result.attention_notes))
+
+    def test_opencodex_detected_codex_mismatch_holds_update(self):
+        fetcher = NetworkFetcher(
+            mock_data={"https://registry.npmjs.org/@openai/codex/latest": {"version": "0.150.0"}}
+        )
+        auditor = ToolchainAuditor(fetcher=fetcher, command_runner=make_mock_runner())
+        mismatched_ocx = OpenCodexDiagnostics(
+            health="HEALTHY",
+            proxy_running=True,
+            proxy_state="HEALTHY",
+            shim_aligned=True,
+            detected_codex="0.148.0",
+        )
+
+        result = auditor.check_codex_cli(ocx_diag=mismatched_ocx)
+
+        self.assertEqual(result.status, "WATCH")
+        self.assertEqual(result.health, "DEGRADED")
+        self.assertTrue(any("Codex/OpenCodex version mismatch" in note for note in result.attention_notes))
+        self.assertIn("versions disagree", result.update_recommendation.breaking_relevance)
 
 
 class TestOfflineUnknownHandling(unittest.TestCase):
@@ -262,6 +361,33 @@ class TestRuntimeDistinction(unittest.TestCase):
             self.assertEqual(bun_bundled.name, "Bun (OpenCodex bundled)")
             self.assertTrue(bun_bundled.is_bundled)
             self.assertEqual(bun_bundled.runtime_type, "bundled")
+
+    def test_missing_optional_system_bun_is_non_actionable_with_healthy_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            appdata = Path(tmp)
+            bundled = appdata / "npm" / "node_modules" / "@bitkyc08" / "opencodex" / "node_modules" / "bun" / "bin" / "bun.exe"
+            bundled.parent.mkdir(parents=True)
+            bundled.touch()
+
+            def runner(args: List[str], timeout: float = 4.0) -> Tuple[int, str, str]:
+                if Path(args[0]) == bundled and args[1:] == ["-v"]:
+                    return 0, "1.4.0", ""
+                return make_mock_runner()(args, timeout)
+
+            fetcher = NetworkFetcher(
+                mock_data={"https://api.github.com/repos/oven-sh/bun/releases/latest": {"tag_name": "bun-v1.4.0"}}
+            )
+            auditor = ToolchainAuditor(fetcher=fetcher, appdata_roaming=appdata, command_runner=runner)
+            with patch("check_toolchain.shutil.which", return_value=None):
+                bun_sys, bun_bundled = auditor.check_bun()
+
+        self.assertEqual(bun_sys.status, "UNKNOWN")
+        self.assertEqual(bun_sys.health, "NOT_INSTALLED")
+        self.assertEqual(bun_sys.attention_notes, [])
+        self.assertIn("optional; bundled Bun in use", bun_sys.install_method)
+        self.assertIsNotNone(bun_bundled)
+        self.assertEqual(bun_bundled.status, "CURRENT")
+        self.assertEqual(bun_bundled.health, "HEALTHY")
 
 
 class TestMalformedOutputResilience(unittest.TestCase):
@@ -335,6 +461,92 @@ class TestObserverResilience(unittest.TestCase):
         report = auditor.audit_all()
         self.assertEqual(report.observer_path_status, "DEGRADED")
         self.assertIn(report.core_stack_health, ("HEALTHY", "DEGRADED", "UNVERIFIED"))
+
+    def test_ocx_health_report_does_not_fake_direct_healthz_verification(self):
+        fetcher = NetworkFetcher(
+            mock_data={"https://registry.npmjs.org/@bitkyc08/opencodex/latest": {"version": "2.31.0"}}
+        )
+        auditor = ToolchainAuditor(fetcher=fetcher, command_runner=make_mock_runner())
+
+        result, diag = auditor.check_opencodex()
+
+        self.assertEqual(diag.direct_healthz, "UNVERIFIED")
+        self.assertEqual(diag.proxy_state, "REPORTED_HEALTHY")
+        self.assertIn("ocx health reports healthy", diag.proxy_summary)
+        self.assertNotIn("healthz verified", diag.proxy_summary)
+        self.assertEqual(result.health, "UNVERIFIED")
+        self.assertTrue(auditor.observer_degraded)
+
+    def test_direct_healthz_success_is_explicitly_verified(self):
+        fetcher = NetworkFetcher(
+            mock_data={"https://registry.npmjs.org/@bitkyc08/opencodex/latest": {"version": "2.31.0"}}
+        )
+        auditor = ToolchainAuditor(fetcher=fetcher, command_runner=make_mock_runner())
+
+        with patch.object(auditor, "_probe_opencodex_healthz", return_value=True):
+            result, diag = auditor.check_opencodex()
+
+        self.assertEqual(diag.direct_healthz, "VERIFIED")
+        self.assertEqual(diag.proxy_state, "HEALTHY")
+        self.assertIn("direct healthz verified", diag.proxy_summary)
+        self.assertEqual(result.health, "HEALTHY")
+
+    def test_restricted_opencodex_diagnostics_are_unverified_not_host_failure(self):
+        blocked = make_mock_runner({
+            "ocx health": (1, "", "EPERM: permission denied"),
+            "ocx status": (1, "", "EPERM: permission denied"),
+        })
+        fetcher = NetworkFetcher(
+            mock_data={"https://registry.npmjs.org/@bitkyc08/opencodex/latest": {"version": "2.31.0"}}
+        )
+        auditor = ToolchainAuditor(fetcher=fetcher, command_runner=blocked)
+
+        result, diag = auditor.check_opencodex()
+
+        self.assertEqual(result.health, "UNVERIFIED")
+        self.assertEqual(diag.proxy_state, "UNVERIFIED")
+        self.assertNotIn("unreachable", diag.proxy_summary)
+        self.assertTrue(auditor.observer_degraded)
+
+    def test_restricted_opencodex_version_observation_is_not_not_installed(self):
+        blocked = make_mock_runner({
+            "ocx --version": (1, "", "access restricted"),
+            "ocx health": (1, "", "access restricted"),
+            "ocx status": (1, "", "access restricted"),
+        })
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=blocked)
+
+        with patch("check_toolchain.safe_read_json", return_value=None):
+            result, diag = auditor.check_opencodex()
+
+        self.assertEqual(result.health, "UNVERIFIED")
+        self.assertEqual(diag.health, "UNVERIFIED")
+        self.assertNotEqual(result.health, "NOT_INSTALLED")
+        self.assertTrue(auditor.observer_degraded)
+
+    def test_malformed_opencodex_status_keeps_observer_evidence_unverified(self):
+        malformed = make_mock_runner({"ocx status": (0, "unexpected status format", "")})
+        fetcher = NetworkFetcher(
+            mock_data={"https://registry.npmjs.org/@bitkyc08/opencodex/latest": {"version": "2.31.0"}}
+        )
+        auditor = ToolchainAuditor(fetcher=fetcher, command_runner=malformed)
+
+        with patch.object(auditor, "_probe_opencodex_healthz", return_value=True):
+            result, diag = auditor.check_opencodex()
+
+        self.assertEqual(diag.proxy_state, "HEALTHY")
+        self.assertEqual(result.health, "UNVERIFIED")
+        self.assertTrue(any("complete Codex-version" in note for note in result.attention_notes))
+        self.assertTrue(auditor.observer_degraded)
+
+    def test_unresolved_findings_never_claim_stable_toolchain(self):
+        fetcher = NetworkFetcher(offline=True)
+        auditor = ToolchainAuditor(fetcher=fetcher, command_runner=make_mock_runner())
+
+        report = auditor.audit_all()
+
+        self.assertIn("No immediate update recommended; unresolved toolchain findings remain.", report.recommended_actions)
+        self.assertFalse(any("Workstation toolchain is stable" in action for action in report.recommended_actions))
 
 
 class TestNoHardcodedDate(unittest.TestCase):

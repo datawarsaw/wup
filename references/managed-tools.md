@@ -15,10 +15,10 @@ This capability is NOT a general Windows package inventory or an autonomous upda
 ### 1. Codex CLI
 - **Component**: Official OpenAI Codex command-line interface.
 - **Install Method**: Global npm package (`@openai/codex`) or standalone binary in PATH.
-- **Installed Version Detection**: Package metadata at `%APPDATA%\npm\node_modules\@openai\codex\package.json` or `codex --version`.
+- **Installed Version Detection**: Always resolve the active executable and execute `codex --version`; this is authoritative. Package metadata at `%APPDATA%\npm\node_modules\@openai\codex\package.json` is supporting evidence only, and a mismatch prevents a clean `CURRENT`/`UPDATE` verdict.
 - **Health Verification**: `codex doctor --json` runtime checks (executable resolution, disk space, install consistency). Note that sandbox-induced auth/reachability warnings in offline environments are classified as observer limitations, not host failures.
 - **Latest Stable Source**: Primary: npm registry (`https://registry.npmjs.org/@openai/codex/latest`). `~/.codex/version.json` is informational only and never substitutes for a failed live lookup. If the registry is unreachable, classify latest as `UNKNOWN`.
-- **Coupling & OpenCodex Compatibility**: Codex CLI and OpenCodex are tightly coupled. Upgrading Codex CLI overwrites npm wrappers (`codex.cmd`, `codex.ps1`), which deactivates the OpenCodex autostart shim until re-installed. When OpenCodex shim is unverified or bypassed, hold Codex CLI update as `WATCH` rather than immediately recommending update.
+- **Coupling & OpenCodex Compatibility**: Codex CLI and OpenCodex are tightly coupled. Upgrading Codex CLI overwrites npm wrappers (`codex.cmd`, `codex.ps1`), which deactivates the OpenCodex autostart shim until re-installed. When OpenCodex shim/health evidence is unverified or bypassed, or `ocx status` detects a different Codex version than the active CLI, hold an available Codex CLI update as `WATCH` rather than immediately recommending it.
 - **Proposed Update Command**: `npm install -g @openai/codex@<version>`
 - **Rollback Command**: `npm install -g @openai/codex@<installed_version>`
 - **Validation Steps**: Run `codex --version`, `codex doctor`, and verify OpenCodex proxy/shim status.
@@ -27,7 +27,7 @@ This capability is NOT a general Windows package inventory or an autonomous upda
 - **Component**: Multi-provider proxy and shim wrapper for Codex CLI.
 - **Install Method**: Global npm package (`@bitkyc08/opencodex`).
 - **Installed Version Detection**: Package metadata at `%APPDATA%\npm\node_modules\@bitkyc08\opencodex\package.json` or `ocx --version`.
-- **Health Verification**: HTTP probe to `http://127.0.0.1:10100/healthz` and `ocx health`.
+- **Health Verification**: Keep a successful direct HTTP probe to `http://127.0.0.1:10100/healthz` distinct from `ocx health` reporting healthy. A blocked, failed, or malformed required diagnostic leaves the affected evidence `UNVERIFIED` and the observer path degraded; it does not prove a host failure or a direct healthz success.
 - **Shim Verification**: Verify whether `%APPDATA%\npm\codex.opencodex-real.cmd` exists and whether `%APPDATA%\npm\codex.cmd` acts as an active OpenCodex shim or has reverted to a standard npm wrapper.
 - **Latest Stable Source**: npm registry (`https://registry.npmjs.org/@bitkyc08/opencodex/latest`). If unreachable, classify latest as `UNKNOWN`.
 - **Proposed Update Command**: `npm install -g @bitkyc08/opencodex@<version>`
@@ -47,8 +47,8 @@ This capability is NOT a general Windows package inventory or an autonomous upda
   - Proxy process listening on port 10100.
   - Shim wrapper files: `codex.cmd`, `codex.ps1`, `codex` vs `codex.opencodex-real.*`.
 - **Classification**:
-  - `CURRENT` if proxy is live and shims are aligned.
-  - `WATCH` if proxy is running but shims are in bypass mode (e.g. after a Codex npm install), or if proxy is offline.
+  - `CURRENT` if the direct proxy probe is verified and shims are aligned.
+  - `WATCH` if proxy evidence is unverified, shims are in bypass mode (e.g. after a Codex npm install), or the proxy is explicitly reported unhealthy.
 
 ### 5. Workstation Ops / MCP
 - **Component**: Local workstation operations MCP server.
@@ -67,7 +67,7 @@ This capability is NOT a general Windows package inventory or an autonomous upda
 ### 7. System Bun vs OpenCodex Bundled Bun
 - **Component**: Bun JavaScript/TypeScript runtime.
 - **Separation Rule**:
-  - **System Bun**: Resolves from system PATH. If not installed in PATH: if latest is unavailable, classify `UNKNOWN`; if latest is verified, classify `WATCH`. Never false `CURRENT`.
+  - **System Bun**: Resolves from system PATH. When it is absent but a healthy OpenCodex-bundled Bun is in use and no system Bun requirement exists, retain the system row as non-actionable `UNKNOWN`/`NOT_INSTALLED` without recurring attention. Never label an absent system runtime `CURRENT`.
   - **OpenCodex Bundled Bun**: Resolves inside OpenCodex node_modules (`%APPDATA%\npm\node_modules\@bitkyc08\opencodex\node_modules\bun\bin\bun.exe`). If command fails, report `UNKNOWN`/unverified without inventing versions.
 
 ### 8. System Python
