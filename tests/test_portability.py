@@ -20,15 +20,16 @@ class PortabilityTests(unittest.TestCase):
         self.assertNotIn("TOKEN", repr(DEFAULT_CONFIG).upper())
 
     def test_config_drives_portable_remote_identity(self):
-        previous = {key: os.environ.get(key) for key in ("WUP_REMOTE_REPOSITORY", "WUP_STATE_BRANCH", "WUP_SNAPSHOT_PUBLISH", "WUP_TELEGRAM_ENABLED", "WUP_TELEGRAM_ENV_FILE")}
+        previous = {key: os.environ.get(key) for key in ("WUP_REMOTE_REPOSITORY", "WUP_STATE_BRANCH", "WUP_SNAPSHOT_PUBLISH", "WUP_TELEGRAM_ENABLED", "WUP_TELEGRAM_ENV_FILE", "WUP_WORKSTATION_OPS_PATH")}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "wup.toml"
-            path.write_text('[remote]\nrepository = "example/wup"\nstate_branch = "state"\npublish_snapshot = true\n[notifications.telegram]\nenabled = true\nenv_file = "C:/generic/secrets.env"\n', encoding="utf-8")
+            path.write_text('[local]\nworkstation_ops_path = "C:/optional/workstation-ops"\n[remote]\nrepository = "example/wup"\nstate_branch = "state"\npublish_snapshot = true\n[notifications.telegram]\nenabled = true\nenv_file = "C:/generic/secrets.env"\n', encoding="utf-8")
             config = load_config(path); apply_runtime_config(config)
             self.assertEqual(os.environ["WUP_REMOTE_REPOSITORY"], "example/wup")
             self.assertEqual(os.environ["WUP_STATE_BRANCH"], "state")
             self.assertEqual(os.environ["WUP_SNAPSHOT_PUBLISH"], "1")
             self.assertEqual(os.environ["WUP_TELEGRAM_ENV_FILE"], "C:/generic/secrets.env")
+            self.assertEqual(os.environ["WUP_WORKSTATION_OPS_PATH"], "C:/optional/workstation-ops")
         for key, value in previous.items():
             if value is None: os.environ.pop(key, None)
             else: os.environ[key] = value

@@ -12,7 +12,7 @@ from typing import Any, Mapping
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "tools": {"enabled": []},
-    "local": {"state_dir": ""},
+    "local": {"state_dir": "", "workstation_ops_path": ""},
     "notifications": {"telegram": {"enabled": False, "env_file": ""}, "email": {"command": ""}},
     "remote": {"repository": "", "state_branch": "toolchain-remote-state", "publish_snapshot": False},
 }
@@ -65,3 +65,4 @@ def apply_runtime_config(config: Mapping[str, Any]) -> None:
     os.environ["WUP_ENABLED_TOOLS"] = ",".join(config["tools"].get("enabled", []))
     if config["notifications"].get("email", {}).get("command"):
         os.environ["WUP_EMAIL_COMMAND"] = str(config["notifications"]["email"]["command"])
+    os.environ["WUP_WORKSTATION_OPS_PATH"] = str(config["local"].get("workstation_ops_path") or "")

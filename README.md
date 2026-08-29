@@ -75,6 +75,7 @@ Copy [`wup.example.toml`](wup.example.toml) to `wup.toml`. Configuration covers:
 
 - monitored tool selection;
 - local state-directory override;
+- optional local Workstation Ops/MCP repository path for its audit check;
 - Telegram enablement;
 - optional external email command;
 - remote repository/state-branch identity used by the snapshot bridge.
