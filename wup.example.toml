@@ -6,6 +6,8 @@ enabled = []
 [local]
 # Empty uses the platform default (for Windows: %LOCALAPPDATA%\\WUP).
 state_dir = ""
+# Optional local Workstation Ops/MCP repository for its audit check. Leave empty when unavailable.
+workstation_ops_path = ""
 
 [notifications.telegram]
 # Telegram credentials are read from TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -304,6 +305,22 @@ class TestProductionClassification(unittest.TestCase):
         self.assertEqual(result.health, "DEGRADED")
         self.assertTrue(any("Codex/OpenCodex version mismatch" in note for note in result.attention_notes))
         self.assertIn("versions disagree", result.update_recommendation.breaking_relevance)
+
+    def test_workstation_ops_path_is_optional_and_uses_configured_repository(self):
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=make_mock_runner())
+        with patch.dict(os.environ, {"WUP_WORKSTATION_OPS_PATH": ""}):
+            optional = auditor.check_workstation_ops()
+        self.assertEqual(optional.status, "UNKNOWN")
+        self.assertEqual(optional.health, "UNVERIFIED")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "package.json").write_text('{"version":"1.2.0"}', encoding="utf-8")
+            (root / "node_modules").mkdir()
+            with patch.dict(os.environ, {"WUP_WORKSTATION_OPS_PATH": str(root)}):
+                configured = auditor.check_workstation_ops()
+        self.assertEqual(configured.installed_version, "1.2.0")
+        self.assertEqual(configured.health, "HEALTHY")
 
 
 class TestOfflineUnknownHandling(unittest.TestCase):

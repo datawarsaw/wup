@@ -10,7 +10,7 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path: sys.path.insert(0, str(SCRIPTS_DIR))
-from run_notifier import actionable_findings, execute, format_email, format_telegram_result
+from run_notifier import actionable_findings, changed_findings, execute, format_email, format_telegram_result
 
 def report(latest_opencodex: str = "2.34.0", release_url: str = "https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.34.0"):
     return {"tools": [
@@ -109,6 +109,32 @@ class RunnerTests(unittest.TestCase):
             mailer = lambda *args: email.append(args) or True
             self.assertEqual(execute(state, audit_runner=report, telegram_sender=sender, email_sender=mailer), 0)
             self.assertEqual(execute(state, audit_runner=lambda: report(release_url="https://example.invalid/corrected"), telegram_sender=sender, email_sender=mailer), 0)
+            self.assertEqual((len(telegram), len(email)), (1, 1))
+
+    def test_health_deterioration_is_material_but_improvement_is_silent(self):
+        previous = {"Codex CLI": {"name": "Codex CLI", "status": "UPDATE", "installed_version": "0.150.1", "latest_version": "0.151.0", "health": "UNVERIFIED"}}
+        healthier = {"name": "Codex CLI", "status": "UPDATE", "installed_version": "0.150.1", "latest_version": "0.151.0", "health": "HEALTHY"}
+        self.assertEqual(changed_findings([healthier], previous), [])
+        self.assertEqual(changed_findings([healthier], {"Codex CLI": {**healthier, "health": "DEGRADED"}}), [])
+        self.assertEqual(len(changed_findings([{**healthier, "health": "UNVERIFIED"}], {"Codex CLI": healthier})), 1)
+        self.assertEqual(len(changed_findings([{**healthier, "health": "DEGRADED"}], previous)), 1)
+        self.assertEqual(len(changed_findings([{**healthier, "health": "DEGRADED"}], {"Codex CLI": healthier})), 1)
+        self.assertEqual(len(changed_findings([{**healthier, "latest_version": "0.152.0"}], previous)), 1)
+        self.assertEqual(len(changed_findings([{**healthier, "status": "WATCH"}], previous)), 1)
+        self.assertEqual(len(changed_findings([{**healthier, "health": "MYSTERY"}], previous)), 1)
+        self.assertEqual(len(changed_findings([healthier], {})), 1)
+
+    def test_health_only_improvement_silently_refreshes_baseline_and_later_regression_alerts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state, telegram, email = Path(temp) / "state.json", [], []
+            baseline = {"version": 2, "last_alerted": {"Codex CLI": {"name": "Codex CLI", "status": "UPDATE", "installed_version": "0.150.1", "latest_version": "0.151.0", "health": "UNVERIFIED"}}}
+            state.write_text(json.dumps(baseline), encoding="utf-8")
+            healthy_report = lambda: {"tools": [{"name": "Codex CLI", "status": "UPDATE", "installed_version": "0.150.1", "latest_version": "0.151.0", "health": "HEALTHY"}]}
+            self.assertEqual(execute(state, audit_runner=healthy_report, telegram_sender=lambda value: telegram.append(value) or True, email_sender=lambda *value: email.append(value) or True), 0)
+            self.assertEqual((telegram, email), ([], []))
+            self.assertEqual(json.loads(state.read_text(encoding="utf-8"))["last_alerted"]["Codex CLI"]["health"], "HEALTHY")
+            unverified_report = lambda: {"tools": [{"name": "Codex CLI", "status": "UPDATE", "installed_version": "0.150.1", "latest_version": "0.151.0", "health": "UNVERIFIED"}]}
+            self.assertEqual(execute(state, audit_runner=unverified_report, telegram_sender=lambda value: telegram.append(value) or True, email_sender=lambda *value: email.append(value) or True), 0)
             self.assertEqual((len(telegram), len(email)), (1, 1))
 
     def test_failed_audit_preserves_state_and_attempts_failed_telegram(self):

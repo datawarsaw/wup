@@ -19,6 +19,7 @@ from wup_config import apply_runtime_config, load_config
 ACTIONABLE = ("URGENT", "UPDATE", "WATCH")
 IGNORED = ("CURRENT", "UNKNOWN")
 SIGNATURE_FIELDS = ("name", "status", "installed_version", "latest_version", "health")
+HEALTH_SEVERITY = {"HEALTHY": 0, "UNVERIFIED": 1, "DEGRADED": 2, "NOT_INSTALLED": 3}
 PROJECT, TASK = "WUP", "Toolchain Update Watch"
 SCRIPT_DIR = Path(__file__).resolve().parent
 AUDIT_SCRIPT = SCRIPT_DIR / "check_toolchain.py"
@@ -65,8 +66,38 @@ def read_state(path: Path) -> Dict[str, Any]:
         return {"version": 2, "last_alerted": data["last_alerted"], "pending": data.get("pending", {})}
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc: raise RuntimeError(f"cannot read deduplication state: {path}") from exc
 
+def _health_worsened(previous: Any, current: Any) -> bool:
+    if previous == current:
+        return False
+    previous_severity = HEALTH_SEVERITY.get(str(previous))
+    current_severity = HEALTH_SEVERITY.get(str(current))
+    if previous_severity is None or current_severity is None:
+        return True
+    return current_severity > previous_severity
+
+
+def _health_improved_only(item: Mapping[str, Any], previous: Mapping[str, Any]) -> bool:
+    if any(item.get(field) != previous.get(field) for field in ("name", "status", "installed_version", "latest_version")):
+        return False
+    previous_severity = HEALTH_SEVERITY.get(str(previous.get("health")))
+    current_severity = HEALTH_SEVERITY.get(str(item.get("health")))
+    return previous_severity is not None and current_severity is not None and current_severity < previous_severity
+
+
+def finding_changed(item: Mapping[str, Any], previous: Mapping[str, Any] | None) -> bool:
+    if previous is None:
+        return True
+    if any(item.get(field) != previous.get(field) for field in ("name", "status", "installed_version", "latest_version")):
+        return True
+    return _health_worsened(previous.get("health"), item.get("health"))
+
+
 def changed_findings(findings: Sequence[Mapping[str, Any]], previous: Mapping[str, Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    return [dict(item) for item in findings if previous.get(str(item["name"])) != signature(item)]
+    return [dict(item) for item in findings if finding_changed(item, previous.get(str(item["name"])))]
+
+
+def has_silent_health_refresh(findings: Sequence[Mapping[str, Any]], previous: Mapping[str, Mapping[str, Any]]) -> bool:
+    return any(_health_improved_only(item, prior) for item in findings if (prior := previous.get(str(item["name"]))) is not None)
 
 def format_telegram_result(findings: Sequence[Mapping[str, Any]]) -> str:
     groups = []
@@ -200,7 +231,13 @@ def execute(state_path: Path, dry_run: bool = False, audit_runner: Callable[[], 
         try:
             if not snapshot_publisher(build_snapshot(report)): print("SNAPSHOT_PUBLISH: unavailable", file=sys.stderr)
         except Exception: print("SNAPSHOT_PUBLISH: unavailable", file=sys.stderr)
-    if not changed: print("NO_CHANGE: no new or materially changed actionable findings"); return 0
+    if not changed:
+        if not dry_run and not state["pending"] and has_silent_health_refresh(findings, state["last_alerted"]):
+            write_state(state_path, findings)
+            print("NO_CHANGE: health-only improvements refreshed the local baseline")
+        else:
+            print("NO_CHANGE: no new or materially changed actionable findings")
+        return 0
     telegram_result = format_telegram_result(changed); subject, text, html_body = format_email(changed)
     if dry_run:
         print(f"DRY_RUN_TELEGRAM: {telegram_result}"); print(f"DRY_RUN_EMAIL_SUBJECT: {subject}"); print(f"DRY_RUN_EMAIL_BODY:\n{text}"); return 0
