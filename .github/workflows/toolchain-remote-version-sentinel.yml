@@ -3,6 +3,8 @@ name: WUP Remote Version Sentinel
 # Pass A ships manual-only. Enable a schedule only after WUP has its own
 # secrets and state branch during the reviewed production cutover.
 on:
+  schedule:
+    - cron: "30 6 * * *"
   workflow_dispatch:
     inputs:
       send_test_notification:

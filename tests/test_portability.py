@@ -60,11 +60,12 @@ class PortabilityTests(unittest.TestCase):
         values = load_credentials({"WUP_TELEGRAM_ENV_FILE": "C:/does-not-exist/secrets.env"})
         self.assertEqual(values, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""})
 
-    def test_public_workflow_uses_private_snapshot_secret_and_is_manual_only(self):
+    def test_public_workflow_uses_private_snapshot_secret_and_daily_schedule(self):
         workflow = (ROOT / ".github" / "workflows" / "toolchain-remote-version-sentinel.yml").read_text(encoding="utf-8")
         self.assertIn("secrets.WUP_WORKSTATION_SNAPSHOT", workflow)
         self.assertNotIn("workstation-snapshot.json >", workflow)
-        self.assertNotIn("schedule:", workflow)
+        self.assertIn('schedule:\n    - cron: "30 6 * * *"', workflow)
+        self.assertIn("workflow_dispatch:", workflow)
 
     def test_scheduled_runner_requires_explicit_config_path(self):
         runner = (SCRIPTS / "run-scheduled-notifier.ps1").read_text(encoding="utf-8")
