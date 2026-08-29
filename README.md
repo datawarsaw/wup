@@ -48,6 +48,14 @@ The notifier saves successful alert signatures at `%LOCALAPPDATA%\WhiteGull\tool
 
 Email includes an authoritative release, package, or changelog link when the audit can derive one deterministically from its verified release source. Node.js, Python, and npm prefer their direct version-specific release content; package or download pages are retained only as deterministic fallbacks. These links are informational and are not part of the deduplication signature, so a corrected link alone never creates another alert. Telegram remains compact and does not include per-tool links.
 
+## Remote Version Sentinel
+
+The GitHub Actions **Remote Version Sentinel** observes public upstream releases even while this PC is off. It tracks Codex CLI, OpenCodex, Node.js, npm, Git, Wrangler, and Bun using the same authoritative public source definitions as the local checker. It reports upstream release changes only; it never claims an installed workstation version, runtime health, proxy/shim status, or LM Studio state.
+
+The workflow runs best-effort at 06:30 UTC (about 08:30 CEST / 07:30 CET) and can start late under GitHub scheduling. Its machine-managed `toolchain-remote-state` branch contains only `remote-version-state.json`, never implementation source, secrets, or local runtime state. The first successful run creates a silent baseline. Later runs commit only version changes; resolver failures preserve the last good version and are visible in workflow output.
+
+Telegram delivery uses only GitHub Actions secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Secrets are not enrolled by this repository. A manual `workflow_dispatch` run can set `send_test_notification` to send one labelled connectivity test without observing or changing state.
+
 ## Configuration and secrets
 
 This repository contains no alert credentials or runtime state. Telegram configuration belongs to `telegram-notify`'s local secret boundary. Cloudflare Email is owned by Workstation Ops: its API token may come from the current process environment or its Windows DPAPI CurrentUser fallback; account ID, sender, and fixed recipient belong in local Workstation Ops configuration. The helper does not accept a recipient override.

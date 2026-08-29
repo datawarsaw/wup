@@ -196,6 +196,57 @@ class NetworkFetcher:
             return None
 
 
+REMOTE_VERSION_SOURCES = {
+    "Codex CLI": "https://registry.npmjs.org/@openai/codex/latest",
+    "OpenCodex": "https://registry.npmjs.org/@bitkyc08/opencodex/latest",
+    "Node.js": "https://nodejs.org/dist/index.json",
+    "npm": "https://registry.npmjs.org/npm/latest",
+    "Git": "https://api.github.com/repos/git-for-windows/git/releases/latest",
+    "Wrangler": "https://registry.npmjs.org/wrangler/latest",
+    "Bun": "https://api.github.com/repos/oven-sh/bun/releases/latest",
+}
+
+
+def resolve_remote_upstream_versions(fetcher: NetworkFetcher) -> Tuple[Dict[str, Dict[str, str]], Dict[str, str]]:
+    """Resolve upstream-only versions without inspecting a workstation executable or runtime."""
+    versions: Dict[str, Dict[str, str]] = {}
+    failures: Dict[str, str] = {}
+
+    npm_tools = {
+        "Codex CLI": (REMOTE_VERSION_SOURCES["Codex CLI"], "https://www.npmjs.com/package/@openai/codex"),
+        "OpenCodex": (REMOTE_VERSION_SOURCES["OpenCodex"], "https://www.npmjs.com/package/@bitkyc08/opencodex"),
+        "npm": (REMOTE_VERSION_SOURCES["npm"], "https://github.com/npm/cli/releases"),
+        "Wrangler": (REMOTE_VERSION_SOURCES["Wrangler"], "https://www.npmjs.com/package/wrangler"),
+    }
+    for name, (source, page) in npm_tools.items():
+        data = fetcher.fetch_json(source)
+        version = str(data.get("version", "")) if isinstance(data, dict) else ""
+        if SemVer.parse(version):
+            versions[name] = {"latest_version": version, "release_url": f"{page}/v/{version}" if name != "npm" else f"https://github.com/npm/cli/releases/tag/v{version}"}
+        else:
+            failures[name] = "authoritative npm registry response was unavailable or invalid"
+
+    node_data = fetcher.fetch_json(REMOTE_VERSION_SOURCES["Node.js"])
+    if isinstance(node_data, list):
+        version = next((str(item.get("version", "")).lstrip("v") for item in node_data if isinstance(item, dict) and SemVer.parse(str(item.get("version", "")).lstrip("v")) and "-" not in str(item.get("version", ""))), "")
+        if version:
+            versions["Node.js"] = {"latest_version": version, "release_url": f"https://nodejs.org/en/blog/release/v{version}"}
+        else:
+            failures["Node.js"] = "authoritative Node.js release index had no stable release"
+    else:
+        failures["Node.js"] = "authoritative Node.js release index was unavailable or invalid"
+
+    for name, source, fallback in (("Git", REMOTE_VERSION_SOURCES["Git"], "https://github.com/git-for-windows/git/releases"), ("Bun", REMOTE_VERSION_SOURCES["Bun"], "https://github.com/oven-sh/bun/releases")):
+        data = fetcher.fetch_json(source)
+        tag = str(data.get("tag_name", "")) if isinstance(data, dict) else ""
+        match = re.search(r"(\d+\.\d+\.\d+)", tag)
+        if match:
+            versions[name] = {"latest_version": match.group(1), "release_url": str(data.get("html_url") or fallback)}
+        else:
+            failures[name] = "authoritative GitHub release response was unavailable or invalid"
+    return versions, failures
+
+
 def safe_run_command(args: List[str], timeout: float = 4.0) -> Tuple[int, str, str]:
     """Run a command safely with bounded timeout, resolved binary, and no shell."""
     try:

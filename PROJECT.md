@@ -20,6 +20,8 @@ The helper path may be overridden with `WORKSTATION_OPS_EMAIL_HELPER`; the defau
 
 Telegram and Cloudflare Email receive the same changed actionable findings. Email additionally renders deterministic authoritative release metadata when it is available; Telegram remains compact. Release URLs are informational and excluded from the deduplication signature. Telegram is attempted first. If email fails after Telegram succeeds, the notifier records the Telegram signatures as pending while retaining the previous full-success state; a later retry avoids duplicate Telegram delivery and retries email. An audit failure can emit a Telegram failure signal, but does not overwrite good deduplication state.
 
+GitHub Actions also runs a separate Remote Version Sentinel: public upstream resolver -> `toolchain-remote-state` branch -> compact Telegram upstream-release notice. It has no workstation observation and does not use the local notifier, Cloudflare Email, or local deduplication state. Its first successful observation is silent; only version changes are notified and committed. GitHub Actions secrets are the only permitted remote Telegram configuration.
+
 ## Runtime state
 
 Runtime deduplication state is `%LOCALAPPDATA%\WhiteGull\toolchain-update-watch\last-alerted.json`. It is machine-local operational data, not Git-tracked project state. The component owns a small PowerShell manager for the same-user `WhiteGull Toolchain Update Watch` Windows Scheduled Task; its registered definition contains only executable and repository paths, never credentials.
