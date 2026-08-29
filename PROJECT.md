@@ -22,7 +22,7 @@ Telegram and Cloudflare Email receive the same changed actionable findings. Emai
 
 ## Runtime state
 
-Runtime deduplication state is `%LOCALAPPDATA%\WhiteGull\toolchain-update-watch\last-alerted.json`. It is machine-local operational data, not Git-tracked project state. There is no component-owned scheduler definition in Git; any schedule is external workstation configuration.
+Runtime deduplication state is `%LOCALAPPDATA%\WhiteGull\toolchain-update-watch\last-alerted.json`. It is machine-local operational data, not Git-tracked project state. The component owns a small PowerShell manager for the same-user `WhiteGull Toolchain Update Watch` Windows Scheduled Task; its registered definition contains only executable and repository paths, never credentials.
 
 ## Security boundaries
 
@@ -38,12 +38,13 @@ Git code and durable documentation are the implementation and architecture truth
 - Primary-source lookup failures yield `UNKNOWN`, never a false `CURRENT` verdict.
 - Codex/OpenCodex coupling can hold a nominal update at `WATCH` when shim, proxy, or version evidence is unsafe.
 - Notification deduplication is based on a small semantic signature rather than report timestamps.
-- External notification configuration and scheduler ownership keep secrets and workstation policy out of Git.
+- Windows Task Scheduler drives the notifier daily at 08:00: scheduler -> audit/deduplication -> Telegram and Cloudflare Email. The task uses `StartWhenAvailable`, wake-to-run, a bounded execution time, and ignores overlapping instances.
+- External notification configuration keeps secrets and workstation policy out of Git. Telegram remains a same-user local secret; Cloudflare token is Workstation Ops CurrentUser DPAPI and account/email configuration remains Workstation Ops local config.
 
 ## Non-goals
 
-It is not a package manager, fleet inventory, background service, scheduler installer, credential store, Cloudflare routing/DNS manager, or a replacement for Linear.
+It is not a package manager, fleet inventory, background service, credential store, Cloudflare routing/DNS manager, or a replacement for Linear.
 
 ## Current maturity
 
-The audit and notifier have deterministic unit coverage for classification, redaction, offline/observer handling, dry-run behavior, changed-finding delivery, and partial notification failures. Manual scheduling and live notification configuration remain workstation-owner responsibilities.
+The audit and notifier have deterministic unit coverage for classification, redaction, offline/observer handling, dry-run behavior, changed-finding delivery, and partial notification failures. Scheduler management is a reproducible same-user Windows capability and is validated through Task Scheduler itself.

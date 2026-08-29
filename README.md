@@ -50,13 +50,30 @@ Email includes an authoritative release, package, or changelog link when the aud
 
 ## Configuration and secrets
 
-This repository contains no alert credentials or runtime state. Telegram configuration belongs to `telegram-notify`'s local secret boundary. Cloudflare Email reads its API token and account ID from the existing external `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` environment values; its configured sender and fixed recipient come from local Workstation Ops configuration or `WORKSTATION_OPS_EMAIL_FROM` / `WORKSTATION_OPS_EMAIL_TO`. The helper does not accept a recipient override.
+This repository contains no alert credentials or runtime state. Telegram configuration belongs to `telegram-notify`'s local secret boundary. Cloudflare Email is owned by Workstation Ops: its API token may come from the current process environment or its Windows DPAPI CurrentUser fallback; account ID, sender, and fixed recipient belong in local Workstation Ops configuration. The helper does not accept a recipient override.
 
 The default state is outside Git, under `%LOCALAPPDATA%`. Do not commit it, `.env` files, Cloudflare credentials, or Telegram credentials.
 
-## Scheduler status
+## Windows scheduled task
 
-No scheduler configuration is tracked or managed by this component. Run the notifier manually until a workstation owner creates an external Windows Task Scheduler task. That task should invoke the built notifier, inherit the required external Telegram/Cloudflare configuration, and be tested first with `--dry-run`.
+The component manages one same-user Windows task, **WhiteGull Toolchain Update Watch**. It runs daily at 08:00 local time, starts once at the next availability after a missed run, may wake the PC, ignores a new trigger while a prior run is active, and has a 20-minute execution limit. It is interactive-user and non-elevated by design; after a full reboot it runs after that user next logs in.
+
+Install or update it from the repository root:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File toolchain-update-watch/scripts/manage-scheduled-task.ps1 -Action Install
+```
+
+Inspect, trigger, validate the same-user Cloudflare context, or remove it:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File toolchain-update-watch/scripts/manage-scheduled-task.ps1 -Action Status
+powershell -NoProfile -ExecutionPolicy Bypass -File toolchain-update-watch/scripts/manage-scheduled-task.ps1 -Action Run
+powershell -NoProfile -ExecutionPolicy Bypass -File toolchain-update-watch/scripts/manage-scheduled-task.ps1 -Action ValidateContext
+powershell -NoProfile -ExecutionPolicy Bypass -File toolchain-update-watch/scripts/manage-scheduled-task.ps1 -Action Remove
+```
+
+Task actions contain executable and repository paths only—never credentials. Telegram reads its same-user local secret file. Cloudflare Email reads its Workstation Ops DPAPI/configuration boundary. The task invokes the normal notifier; it never updates packages.
 
 ## Troubleshooting
 
@@ -64,6 +81,8 @@ No scheduler configuration is tracked or managed by this component. Run the noti
 - `UNKNOWN` means the tool did not obtain trustworthy evidence; inspect the individual tool notes instead of assuming the workstation is current.
 - Verify `C:\AI\workstation-ops-mcp\dist\cloudflare-email-cli.js` exists after building Workstation Ops. Override its location with `WORKSTATION_OPS_EMAIL_HELPER` if needed.
 - Run `node telegram-notify/scripts/self-test.mjs` from the repository root to validate Telegram configuration without sending a normal lifecycle notification.
+- Use `ValidateContext` after changing Workstation Ops Cloudflare configuration; it creates and removes a short-lived same-user validation task without sending email or Telegram.
+- If Task Scheduler reports a nonzero last result, run the notifier with `--dry-run` and check that Python, Node, Workstation Ops, and Telegram local configuration are available to the same Windows user.
 - Inspect `%LOCALAPPDATA%\WhiteGull\toolchain-update-watch\last-alerted.json` only to diagnose deduplication; deleting it causes the next actionable findings to be treated as new.
 
 ## Guarantee
