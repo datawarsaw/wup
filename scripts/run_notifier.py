@@ -12,6 +12,7 @@ import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Sequence
+from workstation_snapshot import build_snapshot, publish_snapshot
 
 ACTIONABLE = ("URGENT", "UPDATE", "WATCH")
 IGNORED = ("CURRENT", "UNKNOWN")
@@ -183,12 +184,16 @@ def write_state(path: Path, last_alerted: Sequence[Mapping[str, Any]], pending: 
         os.replace(temporary, path)
     finally: temporary.unlink(missing_ok=True)
 
-def execute(state_path: Path, dry_run: bool = False, audit_runner: Callable[[], Mapping[str, Any]] = run_audit, telegram_sender: Callable[[str], bool] = lambda result: telegram_notify(result), email_sender: Callable[[str, str, str], bool] = email_notify, failed_telegram_sender: Callable[[str], bool] = lambda result: telegram_notify(result, "FAILED")) -> int:
-    try: findings, state = actionable_findings(audit_runner()), read_state(state_path); changed = changed_findings(findings, state["last_alerted"])
+def execute(state_path: Path, dry_run: bool = False, audit_runner: Callable[[], Mapping[str, Any]] = run_audit, telegram_sender: Callable[[str], bool] = lambda result: telegram_notify(result), email_sender: Callable[[str, str, str], bool] = email_notify, failed_telegram_sender: Callable[[str], bool] = lambda result: telegram_notify(result, "FAILED"), snapshot_publisher: Callable[[Mapping[str, Any]], bool] = publish_snapshot) -> int:
+    try: report = audit_runner(); findings, state = actionable_findings(report), read_state(state_path); changed = changed_findings(findings, state["last_alerted"])
     except Exception as exc:
         message = f"Toolchain audit failed: {exc}"
         if not dry_run: failed_telegram_sender(message)
         print(f"FAILED: {message}", file=sys.stderr); return 1
+    if os.environ.get("TOOLCHAIN_SNAPSHOT_PUBLISH") == "1" and not dry_run:
+        try:
+            if not snapshot_publisher(build_snapshot(report)): print("SNAPSHOT_PUBLISH: unavailable", file=sys.stderr)
+        except Exception: print("SNAPSHOT_PUBLISH: unavailable", file=sys.stderr)
     if not changed: print("NO_CHANGE: no new or materially changed actionable findings"); return 0
     telegram_result = format_telegram_result(changed); subject, text, html_body = format_email(changed)
     if dry_run:

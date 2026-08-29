@@ -22,6 +22,8 @@ Telegram and Cloudflare Email receive the same changed actionable findings. Emai
 
 GitHub Actions also runs a separate Remote Version Sentinel: public upstream resolver -> `toolchain-remote-state` branch -> compact Telegram upstream-release notice. It has no workstation observation and does not use the local notifier, Cloudflare Email, or local deduplication state. Its first successful observation is silent; only version changes are notified and committed. GitHub Actions secrets are the only permitted remote Telegram configuration.
 
+Pass A of the Local Snapshot Bridge adds an optional, sanitized `workstation-snapshot.json` beside the remote upstream state. It is produced from the already successful local audit and may be published with the same-user authenticated `gh` CLI without a new credential. The publisher updates only that file and retries a concurrent content conflict once; the remote writer fetches/rebases/retries its separate state-file commit, preserving both files. Failures are secondary telemetry and never alter local alerts, email, or deduplication. Valid stale snapshots enrich with timestamp/age; partial snapshots enrich only matching tools; missing or malformed snapshots use full upstream-only wording.
+
 ## Runtime state
 
 Runtime deduplication state is `%LOCALAPPDATA%\WhiteGull\toolchain-update-watch\last-alerted.json`. It is machine-local operational data, not Git-tracked project state. The component owns a small PowerShell manager for the same-user `WhiteGull Toolchain Update Watch` Windows Scheduled Task; its registered definition contains only executable and repository paths, never credentials.

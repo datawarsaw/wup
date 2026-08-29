@@ -54,6 +54,12 @@ The GitHub Actions **Remote Version Sentinel** observes public upstream releases
 
 The workflow runs best-effort at 06:30 UTC (about 08:30 CEST / 07:30 CET) and can start late under GitHub scheduling. Its machine-managed `toolchain-remote-state` branch contains only `remote-version-state.json`, never implementation source, secrets, or local runtime state. The first successful run creates a silent baseline. Later runs commit only version changes; resolver failures preserve the last good version and are visible in workflow output.
 
+## Local Snapshot Bridge V1
+
+The local watcher remains the authoritative workstation audit. Pass A can build a sanitized `workstation-snapshot.json` from that successful audit's installed-version results for Codex CLI, OpenCodex, Node.js, npm, Git, Wrangler, and Bun. The optional bridge publishes only that file to `toolchain-remote-state` through the current user's authenticated GitHub CLI; it retries a content conflict once and never replaces the branch tree. Snapshot publishing is best-effort and is disabled unless explicitly activated after review. It cannot change local notifier delivery or deduplication.
+
+Remote alerts may use a valid snapshot only as context: `Last locally observed` plus its measurement timestamp/age. A valid stale snapshot still enriches the alert; a partial snapshot enriches matching tools and leaves the rest upstream-only. Missing or malformed snapshots use the full V0 upstream-only fallback. Snapshot freshness never suppresses a genuine release alert, and a snapshot update never triggers one.
+
 Telegram delivery uses only GitHub Actions secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Secrets are not enrolled by this repository. A manual `workflow_dispatch` run can set `send_test_notification` to send one labelled connectivity test without observing or changing state.
 
 ## Configuration and secrets
