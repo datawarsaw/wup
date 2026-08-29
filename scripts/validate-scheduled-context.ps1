@@ -4,11 +4,15 @@ param(
   [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
   [string]$NodePath,
 
-  [string]$EmailHelper = 'C:\AI\workstation-ops-mcp\dist\cloudflare-email-cli.js'
+  [string]$EmailHelper = $env:WUP_EMAIL_HELPER
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not (Test-Path -LiteralPath $EmailHelper -PathType Leaf)) { throw 'The Workstation Ops Cloudflare Email helper is unavailable.' }
+if (-not $EmailHelper) {
+  [pscustomobject]@{ Validated = $true; EmailAdapter = 'not configured' } | ConvertTo-Json -Compress
+  exit 0
+}
+if (-not (Test-Path -LiteralPath $EmailHelper -PathType Leaf)) { throw 'Configured email helper is unavailable.' }
 $env:PATH = "$(Split-Path -Parent $NodePath);$env:PATH"
 $raw = & $NodePath $EmailHelper status
 if ($LASTEXITCODE -ne 0) { throw 'Cloudflare Email status returned a nonzero exit code.' }

@@ -6,6 +6,7 @@ import argparse
 import html
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -13,21 +14,22 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Sequence
 from workstation_snapshot import build_snapshot, publish_snapshot
+from wup_config import apply_runtime_config, load_config
 
 ACTIONABLE = ("URGENT", "UPDATE", "WATCH")
 IGNORED = ("CURRENT", "UNKNOWN")
 SIGNATURE_FIELDS = ("name", "status", "installed_version", "latest_version", "health")
-PROJECT, TASK = "Agent Platform", "Toolchain Update Watch"
+PROJECT, TASK = "WUP", "Toolchain Update Watch"
 SCRIPT_DIR = Path(__file__).resolve().parent
 AUDIT_SCRIPT = SCRIPT_DIR / "check_toolchain.py"
-NOTIFY_SCRIPT = SCRIPT_DIR.parent.parent / "telegram-notify" / "scripts" / "notify.mjs"
-EMAIL_HELPER = Path(os.environ.get("WORKSTATION_OPS_EMAIL_HELPER", r"C:\AI\workstation-ops-mcp\dist\cloudflare-email-cli.js"))
+NOTIFY_SCRIPT = SCRIPT_DIR / "telegram_notify.py"
 RunProcess = Callable[..., subprocess.CompletedProcess[str]]
 
 class AuditError(RuntimeError): pass
 
 def default_state_path() -> Path:
-    return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "WhiteGull" / "toolchain-update-watch" / "last-alerted.json"
+    root = os.environ.get("WUP_STATE_DIR") or (Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "WUP")
+    return Path(root) / "last-alerted.json"
 
 def run_audit(run_process: RunProcess = subprocess.run) -> Mapping[str, Any]:
     process = run_process([sys.executable, str(AUDIT_SCRIPT), "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
@@ -126,16 +128,16 @@ def _email_card(item: Mapping[str, Any]) -> str:
 def format_email(findings: Sequence[Mapping[str, Any]], today: date | None = None) -> tuple[str, str, str]:
     highest = next((status for status in ACTIONABLE if any(item["status"] == status for item in findings)), "UPDATE")
     audit_date = (today or date.today()).isoformat()
-    subject = f"Toolchain Update Watch  {highest}  {audit_date}"
+    subject = f"WUP Toolchain Update Watch  {highest}  {audit_date}"
     summary = _severity_summary(findings)
-    text_lines = ["Toolchain Update Watch", f"Audit date: {audit_date}", f"{len(findings)} actionable finding(s): {summary}", "", "Only new or materially changed actionable findings are listed."]
+    text_lines = ["WUP Toolchain Update Watch", f"Audit date: {audit_date}", f"{len(findings)} actionable finding(s): {summary}", "", "Only new or materially changed actionable findings are listed."]
     html_parts = [
         '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;padding:0;background:#eef1f0;">',
         '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#eef1f0;"><tr><td align="center" style="padding:24px 12px;">',
         '<table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;table-layout:fixed;border:1px solid #d9dfdf;background:#ffffff;">',
         '<tr><td style="padding:24px 24px 20px 24px;border-bottom:1px solid #d9dfdf;background:#f7f8f7;">',
-        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;font-weight:700;letter-spacing:1.2px;color:#4f625e;">WHITE GULL &nbsp; AGENT PLATFORM</div>',
-        '<div style="margin-top:7px;font-family:Arial,Helvetica,sans-serif;font-size:26px;line-height:32px;font-weight:700;color:#172321;">Toolchain Update Watch</div>',
+        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;font-weight:700;letter-spacing:1.2px;color:#4f625e;">WUP</div>',
+        '<div style="margin-top:7px;font-family:Arial,Helvetica,sans-serif;font-size:26px;line-height:32px;font-weight:700;color:#172321;">WUP Toolchain Update Watch</div>',
         f'<div style="margin-top:6px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:19px;color:#61706d;">Audit date: {audit_date}</div>',
         '</td></tr>',
         '<tr><td style="padding:18px 24px;border-bottom:1px solid #d9dfdf;">',
@@ -163,16 +165,20 @@ def format_email(findings: Sequence[Mapping[str, Any]], today: date | None = Non
             html_parts.append(_email_card(item))
     html_parts.extend([
         '</td></tr>',
-        '<tr><td style="padding:16px 24px;border-top:1px solid #d9dfdf;background:#f7f8f7;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:17px;color:#61706d;">Toolchain Update Watch &nbsp; Agent Platform<br>Automated read-only workstation audit</td></tr>',
+        '<tr><td style="padding:16px 24px;border-top:1px solid #d9dfdf;background:#f7f8f7;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:17px;color:#61706d;">WUP<br>Automated read-only workstation audit</td></tr>',
         '</table></td></tr></table></body></html>',
     ])
     return subject, "\n".join(text_lines), "".join(html_parts)
 
 def telegram_notify(result: str, state: str = "COMPLETE", run_process: RunProcess = subprocess.run) -> bool:
-    return run_process(["node", str(NOTIFY_SCRIPT), "--project", PROJECT, "--task", TASK, "--state", state, "--result", result], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False).returncode == 0
+    if os.environ.get("WUP_TELEGRAM_ENABLED") != "1": return True
+    message = f"{TASK} ({state})\n{result}"
+    return run_process([sys.executable, str(NOTIFY_SCRIPT), "--message", message], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False).returncode == 0
 
 def email_notify(subject: str, text: str, html_body: str, run_process: RunProcess = subprocess.run) -> bool:
-    return run_process(["node", str(EMAIL_HELPER), "send", "--subject", subject, "--text", text, "--html", html_body], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False).returncode == 0
+    command = os.environ.get("WUP_EMAIL_COMMAND", "").strip()
+    if not command: return True
+    return run_process([*shlex.split(command, posix=os.name != "nt"), "send", "--subject", subject, "--text", text, "--html", html_body], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False).returncode == 0
 
 def write_state(path: Path, last_alerted: Sequence[Mapping[str, Any]], pending: Mapping[str, Mapping[str, Any]] | None = None) -> None:
     payload: Dict[str, Any] = {"version": 2, "last_alerted": {str(item["name"]): signature(item) for item in last_alerted}}
@@ -190,7 +196,7 @@ def execute(state_path: Path, dry_run: bool = False, audit_runner: Callable[[], 
         message = f"Toolchain audit failed: {exc}"
         if not dry_run: failed_telegram_sender(message)
         print(f"FAILED: {message}", file=sys.stderr); return 1
-    if os.environ.get("TOOLCHAIN_SNAPSHOT_PUBLISH") == "1" and not dry_run:
+    if os.environ.get("WUP_SNAPSHOT_PUBLISH") == "1" and not dry_run:
         try:
             if not snapshot_publisher(build_snapshot(report)): print("SNAPSHOT_PUBLISH: unavailable", file=sys.stderr)
         except Exception: print("SNAPSHOT_PUBLISH: unavailable", file=sys.stderr)
@@ -208,7 +214,10 @@ def execute(state_path: Path, dry_run: bool = False, audit_runner: Callable[[], 
     write_state(state_path, findings); print(f"ALERTED: {telegram_result}"); return 0
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--dry-run", action="store_true", help="audit and render payloads without notification or state writes"); parser.add_argument("--state-path", type=Path, default=default_state_path(), help=argparse.SUPPRESS); args = parser.parse_args()
-    return execute(args.state_path, dry_run=args.dry_run)
+    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--dry-run", action="store_true", help="audit and render payloads without notification or state writes"); parser.add_argument("--config", type=Path, help="optional WUP TOML configuration"); parser.add_argument("--state-path", type=Path, default=None, help=argparse.SUPPRESS); args = parser.parse_args()
+    config = load_config(args.config); apply_runtime_config(config)
+    if config["local"].get("state_dir"): os.environ["WUP_STATE_DIR"] = str(config["local"]["state_dir"])
+    state_path = args.state_path or default_state_path()
+    return execute(state_path, dry_run=args.dry_run)
 
 if __name__ == "__main__": raise SystemExit(main())

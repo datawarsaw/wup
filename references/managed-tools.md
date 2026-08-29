@@ -52,8 +52,8 @@ This capability is NOT a general Windows package inventory or an autonomous upda
 
 ### 5. Workstation Ops / MCP
 - **Component**: Local workstation operations MCP server.
-- **Install Method**: Local repository at `C:\AI\workstation-ops-mcp`.
-- **Installed Version Detection**: Read from `C:\AI\workstation-ops-mcp\package.json`.
+- **Install Method**: Optional local repository configured by `WUP_WORKSTATION_OPS_PATH`.
+- **Installed Version Detection**: Read from that configured repository's `package.json` when available.
 - **Latest Version Channel**: No reliable external release registry is declared, so latest remains `UNKNOWN`.
 - **Classification**: Report local health separately. Use `UNKNOWN` without a reliable latest channel, or `WATCH` for a verified local health concern.
 

@@ -2,7 +2,7 @@
 param(
   [ValidateSet('Install', 'Status', 'Run', 'Remove', 'ValidateContext')]
   [string]$Action = 'Status',
-  [string]$TaskName = 'WhiteGull Toolchain Update Watch',
+  [string]$TaskName = 'WUP Toolchain Update Watch',
   [string]$PythonPath,
   [string]$NodePath
 )

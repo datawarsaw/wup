@@ -96,9 +96,9 @@ class RemoteSentinelTests(unittest.TestCase):
         def runner(args, **_):
             calls.append(args)
             return Result(0, "sha\n") if "GET" in args else Result(1 if len([x for x in calls if "PUT" in x]) == 1 else 0)
-        self.assertTrue(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, runner))
+        self.assertTrue(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, runner, repository="example/wup"))
         self.assertEqual(len([x for x in calls if "PUT" in x]), 2)
-        self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, lambda *a, **k: Result(1)))
+        self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, lambda *a, **k: Result(1), repository="example/wup"))
 
     def test_snapshot_publisher_creates_then_updates_using_state_branch_ref(self):
         calls = []
@@ -107,7 +107,7 @@ class RemoteSentinelTests(unittest.TestCase):
         responses = [Result(1), Result(0), Result(0, "state-branch-sha\n"), Result(0)]
         def runner(args, **_): calls.append(args); return responses.pop(0)
         snapshot = {"version": 1, "measured_at": "2026-08-29T08:03:00+00:00", "tools": {}}
-        self.assertTrue(publish_snapshot(snapshot, runner, attempts=1)); self.assertTrue(publish_snapshot(snapshot, runner, attempts=1))
+        self.assertTrue(publish_snapshot(snapshot, runner, attempts=1, repository="example/wup")); self.assertTrue(publish_snapshot(snapshot, runner, attempts=1, repository="example/wup"))
         gets = [args for args in calls if "GET" in args]; puts = [args for args in calls if "PUT" in args]
         self.assertTrue(all("ref=toolchain-remote-state" in args for args in gets))
         self.assertNotIn("sha=", " ".join(puts[0])); self.assertIn("sha=state-branch-sha", puts[1])
@@ -118,25 +118,25 @@ class RemoteSentinelTests(unittest.TestCase):
         def get_timeout(*_, **kwargs):
             self.assertEqual(kwargs["timeout"], 10)
             raise __import__("subprocess").TimeoutExpired("gh", 10)
-        self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, get_timeout))
+        self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, get_timeout, repository="example/wup"))
         calls = []
         def put_timeout(args, **kwargs):
             calls.append(args); self.assertEqual(kwargs["timeout"], 10)
             if "GET" in args: return Result()
             raise __import__("subprocess").TimeoutExpired("gh", 10)
-        self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, put_timeout))
+        self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, put_timeout, repository="example/wup"))
         self.assertEqual(len([args for args in calls if "PUT" in args]), 2)
 
     def test_publisher_failure_does_not_change_local_notifier_result_or_state(self):
         report = {"timestamp": "2026-08-29T08:03:00+00:00", "tools": [{"name": "Node.js", "status": "CURRENT", "installed_version": "24.20.0", "latest_version": "24.20.0", "health": "HEALTHY"}]}
         with tempfile.TemporaryDirectory() as directory:
             state_path = Path(directory) / "last-alerted.json"
-            previous = os.environ.get("TOOLCHAIN_SNAPSHOT_PUBLISH")
-            os.environ["TOOLCHAIN_SNAPSHOT_PUBLISH"] = "1"
+            previous = os.environ.get("WUP_SNAPSHOT_PUBLISH")
+            os.environ["WUP_SNAPSHOT_PUBLISH"] = "1"
             try: self.assertEqual(execute(state_path, audit_runner=lambda: report, snapshot_publisher=lambda _: (_ for _ in ()).throw(__import__("subprocess").TimeoutExpired("gh", 10))), 0)
             finally:
-                if previous is None: os.environ.pop("TOOLCHAIN_SNAPSHOT_PUBLISH", None)
-                else: os.environ["TOOLCHAIN_SNAPSHOT_PUBLISH"] = previous
+                if previous is None: os.environ.pop("WUP_SNAPSHOT_PUBLISH", None)
+                else: os.environ["WUP_SNAPSHOT_PUBLISH"] = previous
             self.assertFalse(state_path.exists())
 
     def test_resolvers_use_deterministic_mocked_public_sources(self):

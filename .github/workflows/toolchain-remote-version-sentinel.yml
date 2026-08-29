@@ -1,0 +1,77 @@
+name: WUP Remote Version Sentinel
+
+# Pass A ships manual-only. Enable a schedule only after WUP has its own
+# secrets and state branch during the reviewed production cutover.
+on:
+  workflow_dispatch:
+    inputs:
+      send_test_notification:
+        description: Send one labelled Telegram connectivity test without observing or mutating state
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wup-remote-version-sentinel
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Send explicit connectivity test
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.send_test_notification }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/telegram_notify.py --message "[WUP REMOTE SENTINEL TEST] Telegram connectivity verified. No remote version state was observed or changed."
+      - name: Observe upstream versions
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.send_test_notification }}
+        id: sentinel
+        run: |
+          git fetch origin toolchain-remote-state || true
+          state="$RUNNER_TEMP/remote-version-state.json"
+          snapshot="$RUNNER_TEMP/workstation-snapshot.json"
+          if git show origin/toolchain-remote-state:remote-version-state.json > "$state" 2>/dev/null; then true; else rm -f "$state"; fi
+          if git show origin/toolchain-remote-state:workstation-snapshot.json > "$snapshot" 2>/dev/null; then true; else rm -f "$snapshot"; fi
+          python scripts/remote_version_sentinel.py --state-path "$state" --snapshot-path "$snapshot" --json > "$RUNNER_TEMP/result.json"
+          cat "$RUNNER_TEMP/result.json"
+          echo "state_changed=$(python -c 'import json; print(str(json.load(open("'"$RUNNER_TEMP"'/result.json"))["state_changed"]).lower())')" >> "$GITHUB_OUTPUT"
+          echo "change_count=$(python -c 'import json; print(len(json.load(open("'"$RUNNER_TEMP"'/result.json"))["changes"]))')" >> "$GITHUB_OUTPUT"
+      - name: Notify upstream changes
+        if: ${{ steps.sentinel.outputs.change_count != '0' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          result="$RUNNER_TEMP/result.json"
+          message=$(python -c 'import json,sys,datetime; sys.path.insert(0,"scripts"); from remote_version_sentinel import telegram_result_with_snapshot,read_snapshot; print(telegram_result_with_snapshot(json.load(open("'"$RUNNER_TEMP"'/result.json"))["changes"],read_snapshot(__import__("pathlib").Path("'"$RUNNER_TEMP"'/workstation-snapshot.json")),datetime.datetime.now(datetime.timezone.utc)))')
+          python scripts/telegram_notify.py --message "$message"
+      - name: Persist material remote state
+        if: ${{ steps.sentinel.outputs.state_changed == 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git show-ref --verify --quiet refs/remotes/origin/toolchain-remote-state; then
+            git switch --track -c toolchain-remote-state origin/toolchain-remote-state
+          else
+            git switch --orphan toolchain-remote-state
+          fi
+          cp "$RUNNER_TEMP/remote-version-state.json" remote-version-state.json
+          git add remote-version-state.json
+          git commit -m "chore: record remote toolchain versions"
+          for attempt in 1 2; do
+            if git push origin toolchain-remote-state; then exit 0; fi
+            if [ "$attempt" = 2 ]; then exit 1; fi
+            git fetch origin toolchain-remote-state
+            git rebase origin/toolchain-remote-state
+          done

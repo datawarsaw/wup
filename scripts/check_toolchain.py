@@ -791,14 +791,17 @@ class ToolchainAuditor:
     def check_workstation_ops(self) -> ToolCheckResult:
         name = "Workstation Ops / MCP"
         installed_version = None
-        install_method = "local repository (C:\\AI\\workstation-ops-mcp)"
+        configured_path = os.environ.get("WUP_WORKSTATION_OPS_PATH", "")
+        install_method = "optional local repository (set WUP_WORKSTATION_OPS_PATH)"
         latest_version = "unknown"
         latest_source = "local project repository (no remote registry channel declared)"
         health = "HEALTHY"
         status = "UNKNOWN"
         attention: List[str] = []
 
-        mcp_path = Path("C:/AI/workstation-ops-mcp")
+        mcp_path = Path(configured_path) if configured_path else None
+        if mcp_path is None:
+            return ToolCheckResult(name=name, installed_version="unknown", install_method=install_method, latest_version=latest_version, latest_source=latest_source, status=status, health="UNVERIFIED", attention_notes=["Workstation Ops path is not configured"])
         pkg_path = mcp_path / "package.json"
         pkg_data = safe_read_json(pkg_path)
         if pkg_data and "version" in pkg_data:
@@ -1420,6 +1423,10 @@ class ToolchainAuditor:
         tools.append(git_res)
         tools.append(lms_res)
         tools.append(wrangler_res)
+
+        enabled = {name.strip() for name in os.environ.get("WUP_ENABLED_TOOLS", "").split(",") if name.strip()}
+        if enabled:
+            tools = [tool for tool in tools if tool.name in enabled]
 
         for tool in tools:
             tool.release_url = self.release_url_for(tool)

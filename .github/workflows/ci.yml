@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Compile Python entrypoints
+        run: |
+          python -m py_compile scripts/check_toolchain.py scripts/remote_version_sentinel.py scripts/run_notifier.py scripts/telegram_notify.py scripts/workstation_snapshot.py scripts/wup_config.py
