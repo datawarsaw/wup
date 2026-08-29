@@ -10,6 +10,9 @@ state_dir = ""
 [notifications.telegram]
 # Telegram credentials are read from TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
 enabled = false
+# Optional local file containing only TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
+# Keep it outside this repository and leave empty when process environment is used.
+env_file = ""
 
 [notifications.email]
 # Optional command whose executable accepts: send --subject TEXT --text TEXT --html TEXT
@@ -17,7 +20,7 @@ enabled = false
 command = ""
 
 [remote]
-# Required only for publishing local snapshots. Use the future WUP repository, not this example.
+# Required only for publishing the sanitized local snapshot to a private GitHub Actions secret.
 repository = ""
 state_branch = "toolchain-remote-state"
 publish_snapshot = false

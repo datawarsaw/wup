@@ -4,13 +4,15 @@ param(
   [string]$Action = 'Status',
   [string]$TaskName = 'WUP Toolchain Update Watch',
   [string]$PythonPath,
-  [string]$NodePath
+  [string]$NodePath,
+  [string]$ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
 $scriptDirectory = Split-Path -Parent $PSCommandPath
 $runner = Join-Path $scriptDirectory 'run-scheduled-notifier.ps1'
 $validator = Join-Path $scriptDirectory 'validate-scheduled-context.ps1'
+$defaultConfig = Join-Path (Split-Path -Parent $scriptDirectory) 'wup.toml'
 
 function Resolve-Executable([string]$providedPath, [string]$commandName) {
   if ($providedPath) {
@@ -49,7 +51,9 @@ $powerShell = (Get-Command powershell.exe -CommandType Application -ErrorAction 
 
 if ($Action -eq 'Install') {
   if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Scheduled runner was not found: $runner" }
-  $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File $(Quote-TaskArgument $runner) -PythonPath $(Quote-TaskArgument $resolvedPython) -NodePath $(Quote-TaskArgument $resolvedNode)"
+  $configCandidate = if ($ConfigPath) { $ConfigPath } else { $defaultConfig }
+  $resolvedConfig = Resolve-Executable $configCandidate 'unused'
+  $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File $(Quote-TaskArgument $runner) -PythonPath $(Quote-TaskArgument $resolvedPython) -NodePath $(Quote-TaskArgument $resolvedNode) -ConfigPath $(Quote-TaskArgument $resolvedConfig)"
   $trigger = New-ScheduledTaskTrigger -Daily -At 8:00AM
   $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
   $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited

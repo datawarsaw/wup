@@ -26,7 +26,7 @@ Developer machines accumulate CLIs, runtimes, package managers and local service
 - alert deduplication so unchanged findings stay quiet;
 - Telegram notifications with optional external email delivery;
 - remote upstream release awareness through GitHub Actions;
-- a sanitized workstation snapshot that can enrich remote alerts with the last locally observed version and age.
+- an optional private workstation snapshot that can enrich remote alerts with the last locally observed version and age.
 
 There is no WUP-hosted account system, VPS, daemon, database, or control plane required.
 
@@ -48,7 +48,7 @@ flowchart LR
     B --> G[Sanitized workstation snapshot]
     H[GitHub Actions] --> I[Public upstream releases]
     I --> J[Remote version state]
-    G -. optional context .-> J
+    G -. WUP_WORKSTATION_SNAPSHOT .-> H
     J --> E
 ```
 
@@ -88,7 +88,10 @@ Telegram is a valid standalone notification path. Enable it in configuration and
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-through the process environment. WUP owns a small bounded Telegram transport and does not commit these values.
+through the process environment. For same-user scheduled tasks, configuration
+may instead point `env_file` at a local untracked file containing only those
+two keys; process environment values win. WUP owns a small bounded Telegram
+transport and does not commit these values.
 
 ### Email
 
@@ -104,10 +107,16 @@ This keeps provider-specific email credentials and policy outside WUP. A Telegra
 
 [`WUP Remote Version Sentinel`](.github/workflows/toolchain-remote-version-sentinel.yml) can observe public upstream releases through GitHub Actions while the workstation is off.
 
-It keeps machine-managed runtime state on the isolated `toolchain-remote-state` branch:
+It keeps public upstream runtime state on the isolated `toolchain-remote-state`
+branch:
 
-- `remote-version-state.json` — upstream release dedupe;
-- `workstation-snapshot.json` — last sanitized local installed-version observation.
+- `remote-version-state.json` — upstream release dedupe only.
+
+An optional sanitized workstation snapshot uses the same documented schema but
+is stored privately as GitHub Actions secret `WUP_WORKSTATION_SNAPSHOT`. Local
+publishing uses the existing authenticated `gh` CLI with the JSON supplied on
+standard input; WUP creates no PAT. A snapshot by itself never triggers a
+release alert and never participates in upstream release deduplication.
 
 A first observation is silent. Repeated identical observations are silent. A workstation snapshot by itself never triggers a release alert.
 
@@ -135,11 +144,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage-scheduled-tas
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage-scheduled-task.ps1 -Action Remove
 ```
 
-Task definitions contain executable/repository paths only — never credentials.
+Create an untracked `wup.toml` before installation. The manager records its
+explicit path in the task action, so scheduled execution never depends on a
+working directory. Task arguments contain executable/configuration paths only
+— never credentials.
 
 ## Privacy and security
 
-WUP stores local deduplication state outside Git (by default under `%LOCALAPPDATA%\WUP`). Configuration examples contain no secrets. Remote state contains version/snapshot facts only and is isolated from implementation source.
+WUP stores local deduplication state outside Git (by default under `%LOCALAPPDATA%\WUP`). Configuration examples contain no secrets. Public remote state contains upstream release facts only; optional workstation snapshot context is held only as an Actions secret.
 
 External network access is limited to the public release/version sources and notification integrations you choose to configure. WUP does not require a hosted WUP service.
 

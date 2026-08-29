@@ -1,32 +1,32 @@
 # WUP project context
 
-## Purpose
+## Purpose and architecture
 
-WUP is a reusable read-only developer toolchain monitor: local installed
-version/runtime audit plus optional remote upstream-release awareness.
+WUP is a reusable read-only developer toolchain monitor. The local watcher
+audits installed versions/runtime health and deduplicates actionable findings.
+The manual-only GitHub Actions sentinel observes public upstream releases.
 
-## Architecture
+`workstation_snapshot.py` derives a minimal snapshot from the already successful
+local audit. It best-effort publishes that JSON to the private
+`WUP_WORKSTATION_SNAPSHOT` Actions secret using the scheduled user's existing
+authenticated `gh` CLI and stdin. The public `toolchain-remote-state` branch
+contains only `remote-version-state.json`, the upstream release dedupe authority.
 
-`check_toolchain.py` audits local tools. `run_notifier.py` filters/deduplicates
-actionable findings and calls optional transports. `workstation_snapshot.py`
-derives a minimal installed-version snapshot from the same successful audit and
-can publish it best-effort with the scheduled user's authenticated GitHub CLI.
-`remote_version_sentinel.py` observes public versions and enriches genuine
-upstream-change Telegram messages with a valid snapshot.
+## State and security
 
-## State, configuration, and security
+Local dedupe state is outside Git (default `%LOCALAPPDATA%\WUP`). Its version-2
+`last-alerted.json` schema remains compatible with the prior deployment. The
+snapshot schema is unchanged and contains only version, measured_at, tool names,
+and installed_version. It is never committed to the public repository.
 
-Local dedupe state is outside Git (default `%LOCALAPPDATA%\WUP`). The isolated
-`toolchain-remote-state` branch holds only `remote-version-state.json` and
-`workstation-snapshot.json`, never implementation source or credentials.
-`wup.toml` is non-secret configuration. Telegram credentials are environment
-variables; email is an optional external command. Snapshot publishing requires
-explicit repository identity and existing GitHub CLI authentication.
+`wup.toml` is non-secret. Telegram credentials are process environment values
+or a narrow configured env file limited to the two Telegram keys. Email is an
+optional external-command adapter. Scheduled task actions pass an explicit WUP
+config path and contain no credentials.
 
 ## Decisions and non-goals
 
-WUP is read-only, Windows scheduler-first, and has no daemon/service. The
-local audit remains authoritative; remote monitoring is upstream-only. WUP is
-not a package manager, fleet inventory, generic notification inbox, credential
-store, or automatic updater. GitHub Actions scheduling/secrets/state activation
-is a reviewed cutover concern, not part of Pass A.
+WUP is Windows scheduler-first, has no daemon/service, creates no PAT, and
+never updates packages. Public state does not carry local workstation facts.
+Enabling schedules, setting secrets, migrating state, and replacing the prior
+deployment are reviewed cutover operations outside Pass B1.

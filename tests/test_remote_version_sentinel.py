@@ -89,43 +89,26 @@ class RemoteSentinelTests(unittest.TestCase):
         with self.assertRaises(ValueError): build_snapshot({"tools": []})
         self.assertIn("Bun", SNAPSHOT_TOOLS)
 
-    def test_snapshot_publisher_retries_conflict_and_fails_safely(self):
+    def test_snapshot_publisher_uses_private_secret_stdin_and_retries_safely(self):
         calls = []
         class Result:
             def __init__(self, code, stdout=""): self.returncode, self.stdout = code, stdout
-        def runner(args, **_):
-            calls.append(args)
-            return Result(0, "sha\n") if "GET" in args else Result(1 if len([x for x in calls if "PUT" in x]) == 1 else 0)
+        def runner(args, **kwargs):
+            calls.append((args, kwargs))
+            return Result(1 if len(calls) == 1 else 0)
         self.assertTrue(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, runner, repository="example/wup"))
-        self.assertEqual(len([x for x in calls if "PUT" in x]), 2)
+        self.assertEqual(len(calls), 2)
+        args, kwargs = calls[-1]
+        self.assertEqual(args, ["gh", "secret", "set", "WUP_WORKSTATION_SNAPSHOT", "--repo", "example/wup"])
+        self.assertIn('"measured_at":"x"', kwargs["input"])
+        self.assertNotIn('"measured_at":"x"', " ".join(args))
         self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, lambda *a, **k: Result(1), repository="example/wup"))
 
-    def test_snapshot_publisher_creates_then_updates_using_state_branch_ref(self):
-        calls = []
-        class Result:
-            def __init__(self, code, stdout=""): self.returncode, self.stdout = code, stdout
-        responses = [Result(1), Result(0), Result(0, "state-branch-sha\n"), Result(0)]
-        def runner(args, **_): calls.append(args); return responses.pop(0)
-        snapshot = {"version": 1, "measured_at": "2026-08-29T08:03:00+00:00", "tools": {}}
-        self.assertTrue(publish_snapshot(snapshot, runner, attempts=1, repository="example/wup")); self.assertTrue(publish_snapshot(snapshot, runner, attempts=1, repository="example/wup"))
-        gets = [args for args in calls if "GET" in args]; puts = [args for args in calls if "PUT" in args]
-        self.assertTrue(all("ref=toolchain-remote-state" in args for args in gets))
-        self.assertNotIn("sha=", " ".join(puts[0])); self.assertIn("sha=state-branch-sha", puts[1])
-
-    def test_snapshot_publisher_get_and_put_timeouts_are_bounded_and_safe(self):
-        class Result:
-            returncode, stdout = 1, ""
-        def get_timeout(*_, **kwargs):
+    def test_snapshot_publisher_timeout_is_bounded_and_safe(self):
+        def timeout(*_, **kwargs):
             self.assertEqual(kwargs["timeout"], 10)
             raise __import__("subprocess").TimeoutExpired("gh", 10)
-        self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, get_timeout, repository="example/wup"))
-        calls = []
-        def put_timeout(args, **kwargs):
-            calls.append(args); self.assertEqual(kwargs["timeout"], 10)
-            if "GET" in args: return Result()
-            raise __import__("subprocess").TimeoutExpired("gh", 10)
-        self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, put_timeout, repository="example/wup"))
-        self.assertEqual(len([args for args in calls if "PUT" in args]), 2)
+        self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, timeout, repository="example/wup"))
 
     def test_publisher_failure_does_not_change_local_notifier_result_or_state(self):
         report = {"timestamp": "2026-08-29T08:03:00+00:00", "tools": [{"name": "Node.js", "status": "CURRENT", "installed_version": "24.20.0", "latest_version": "24.20.0", "health": "HEALTHY"}]}
