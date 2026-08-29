@@ -29,9 +29,9 @@ class RunnerTests(unittest.TestCase):
         telegram = format_telegram_result(findings)
         subject, text, html = format_email(findings, date(2026, 8, 28))
         self.assertIn("UPDATE: OpenCodex", telegram); self.assertIn("WATCH: Node.js", telegram)
-        self.assertEqual(subject, "Toolchain Update Watch  UPDATE  2026-08-28")
+        self.assertEqual(subject, "WUP Toolchain Update Watch  UPDATE  2026-08-28")
         self.assertIn("URGENT", text) if "URGENT" in text else None
-        self.assertIn("npm install", text); self.assertIn("WHITE GULL", html)
+        self.assertIn("npm install", text); self.assertIn("WUP", html)
         self.assertIn("What changed:", text); self.assertIn("https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.34.0", text)
         self.assertIn('href="https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.34.0"', html)
         self.assertNotIn("CURRENT", text); self.assertNotIn("LM Studio", text)

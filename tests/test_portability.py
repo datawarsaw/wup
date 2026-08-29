@@ -1,0 +1,49 @@
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+from wup_config import DEFAULT_CONFIG, apply_runtime_config, load_config
+from workstation_snapshot import publish_snapshot
+
+
+class PortabilityTests(unittest.TestCase):
+    def test_clean_defaults_are_secret_free_and_telegram_optional(self):
+        self.assertFalse(DEFAULT_CONFIG["notifications"]["telegram"]["enabled"])
+        self.assertEqual(DEFAULT_CONFIG["notifications"]["email"]["command"], "")
+        self.assertNotIn("TOKEN", repr(DEFAULT_CONFIG).upper())
+
+    def test_config_drives_portable_remote_identity(self):
+        previous = {key: os.environ.get(key) for key in ("WUP_REMOTE_REPOSITORY", "WUP_STATE_BRANCH", "WUP_SNAPSHOT_PUBLISH", "WUP_TELEGRAM_ENABLED")}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "wup.toml"
+            path.write_text('[remote]\nrepository = "example/wup"\nstate_branch = "state"\npublish_snapshot = true\n[notifications.telegram]\nenabled = true\n', encoding="utf-8")
+            config = load_config(path); apply_runtime_config(config)
+            self.assertEqual(os.environ["WUP_REMOTE_REPOSITORY"], "example/wup")
+            self.assertEqual(os.environ["WUP_STATE_BRANCH"], "state")
+            self.assertEqual(os.environ["WUP_SNAPSHOT_PUBLISH"], "1")
+        for key, value in previous.items():
+            if value is None: os.environ.pop(key, None)
+            else: os.environ[key] = value
+
+    def test_snapshot_requires_configured_repository(self):
+        previous = os.environ.pop("WUP_REMOTE_REPOSITORY", None)
+        try: self.assertFalse(publish_snapshot({"version": 1, "measured_at": "x", "tools": {}}, lambda *a, **k: None))
+        finally:
+            if previous is not None: os.environ["WUP_REMOTE_REPOSITORY"] = previous
+
+    def test_product_logic_has_no_internal_repository_dependency(self):
+        source = "\n".join(path.read_text(encoding="utf-8") for path in SCRIPTS.glob("*.py"))
+        self.assertNotIn("datawarsaw/code-skills", source)
+        self.assertNotIn("C:\\AI\\code-skills", source)
+        workflow = (ROOT / ".github" / "workflows" / "toolchain-remote-version-sentinel.yml").read_text(encoding="utf-8")
+        self.assertNotIn("code-skills", workflow)
+        self.assertIn("scripts/remote_version_sentinel.py", workflow)
+
+
+if __name__ == "__main__": unittest.main()
