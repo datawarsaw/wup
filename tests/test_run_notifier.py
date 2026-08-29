@@ -31,10 +31,41 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("UPDATE: OpenCodex", telegram); self.assertIn("WATCH: Node.js", telegram)
         self.assertEqual(subject, "Toolchain Update Watch  UPDATE  2026-08-28")
         self.assertIn("URGENT", text) if "URGENT" in text else None
-        self.assertIn("npm install", text); self.assertIn("<h2>UPDATE</h2>", html)
+        self.assertIn("npm install", text); self.assertIn("WHITE GULL", html)
         self.assertIn("What changed:", text); self.assertIn("https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.34.0", text)
         self.assertIn('href="https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.34.0"', html)
         self.assertNotIn("CURRENT", text); self.assertNotIn("LM Studio", text)
+
+    def test_email_html_renders_all_severities_and_optional_sections(self):
+        findings = [
+            {"name": "Critical Tool", "status": "URGENT", "installed_version": "1.0.0", "latest_version": "2.0.0", "health": "DEGRADED", "release_url": "https://example.test/urgent", "proposed_action": "tool update --force"},
+            {"name": "Update Tool", "status": "UPDATE", "installed_version": "3.0.0", "latest_version": "3.1.0", "health": "HEALTHY", "proposed_action": "tool update"},
+            {"name": "Watch Tool", "status": "WATCH", "installed_version": "4.0.0", "latest_version": "4.0.1", "health": "UNVERIFIED", "release_url": "https://example.test/watch"},
+        ]
+        _, text, rendered = format_email(findings, date(2026, 8, 29))
+        for status in ("URGENT", "UPDATE", "WATCH"):
+            self.assertIn(f"{status} &nbsp; 1 finding(s)", rendered)
+            self.assertIn(status, text)
+        self.assertIn("3 actionable finding(s)", rendered)
+        self.assertIn('<meta name="viewport" content="width=device-width, initial-scale=1.0">', rendered)
+        self.assertIn('<table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;', rendered)
+        self.assertIn('href="https://example.test/urgent"', rendered)
+        self.assertIn('href="https://example.test/watch"', rendered)
+        self.assertNotIn("What changed</div><div", rendered.split("Update Tool", 1)[1].split("Watch Tool", 1)[0])
+        self.assertIn("tool update --force", text)
+        self.assertIn("tool update", rendered)
+        self.assertIn("Automated read-only workstation audit", rendered)
+
+    def test_email_html_escapes_dynamic_content_and_keeps_plain_text_complete(self):
+        finding = {"name": "Tool <unsafe>", "status": "UPDATE", "installed_version": "1<&", "latest_version": "2>&", "health": "HEALTHY <ok>", "release_url": 'https://example.test/?q="quoted"', "proposed_action": "tool <update> && echo 'ok'"}
+        _, text, rendered = format_email([finding], date(2026, 8, 29))
+        self.assertIn("Tool &lt;unsafe&gt;", rendered)
+        self.assertIn("1&lt;&amp;", rendered)
+        self.assertIn("HEALTHY &lt;ok&gt;", rendered)
+        self.assertIn('href="https://example.test/?q=&quot;quoted&quot;"', rendered)
+        self.assertIn("tool &lt;update&gt; &amp;&amp; echo &#x27;ok&#x27;", rendered)
+        self.assertIn("Tool <unsafe>", text)
+        self.assertIn("tool <update> && echo 'ok'", text)
 
     def test_email_escapes_a_trustworthy_url_safely(self):
         findings = actionable_findings(report(release_url='https://example.test/?q="quoted"'))

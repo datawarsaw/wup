@@ -72,14 +72,85 @@ def format_telegram_result(findings: Sequence[Mapping[str, Any]]) -> str:
         if items: groups.append(f"{status}: " + ", ".join(items))
     return " | ".join(groups)
 
+def _email_text(value: Any) -> str:
+    return html.escape(str(value if value not in (None, "") else "?"))
+
+def _severity_summary(findings: Sequence[Mapping[str, Any]]) -> str:
+    parts = [f"{sum(1 for item in findings if item['status'] == status)} {status}" for status in ACTIONABLE if any(item['status'] == status for item in findings)]
+    return " | ".join(parts)
+
+def _severity_style(status: str) -> tuple[str, str, str]:
+    styles = {
+        "URGENT": ("#8a1c1c", "#fff1f1", "#d8a1a1"),
+        "UPDATE": ("#7a4b00", "#fff7e6", "#e3c58a"),
+        "WATCH": ("#1f4f78", "#edf6ff", "#a9c8e3"),
+    }
+    return styles[status]
+
+def _email_card(item: Mapping[str, Any]) -> str:
+    status = str(item["status"])
+    accent, tint, border = _severity_style(status)
+    name = _email_text(item["name"])
+    installed = _email_text(item.get("installed_version"))
+    latest = _email_text(item.get("latest_version"))
+    health = _email_text(item.get("health"))
+    metric_style = "padding:0 12px 0 0;font-family:Arial,Helvetica,sans-serif;vertical-align:top;"
+    html_parts = [
+        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 12px 0;border:1px solid #d9dfdf;border-radius:6px;background:#ffffff;">',
+        '<tr><td style="padding:18px 18px 16px 18px;">',
+        f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:17px;line-height:22px;font-weight:700;overflow-wrap:anywhere;color:#172321;">{name}</div>',
+        f'<div style="margin-top:7px;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.7px;color:{accent};"><span style="display:inline-block;padding:3px 7px;border:1px solid {border};border-radius:3px;background:{tint};">{status}</span></div>',
+        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:14px;table-layout:fixed;"><tr>',
+        f'<td width="33%" style="{metric_style}"><div style="font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#61706d;">Installed</div><div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#172321;">{installed}</div></td>',
+        f'<td width="33%" style="{metric_style}"><div style="font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#61706d;">Latest</div><div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#172321;">{latest}</div></td>',
+        f'<td width="34%" style="font-family:Arial,Helvetica,sans-serif;vertical-align:top;"><div style="font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#61706d;">Health</div><div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#172321;">{health}</div></td>',
+        '</tr></table>',
+    ]
+    release_url = item.get("release_url")
+    if release_url:
+        safe_url = html.escape(str(release_url), quote=True)
+        html_parts.extend([
+            '<div style="margin-top:16px;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#61706d;">What changed</div>',
+            f'<div style="margin-top:6px;"><a href="{safe_url}" style="display:inline-block;padding:8px 11px;border:1px solid #2d625b;border-radius:3px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:18px;font-weight:700;color:#174b44;text-decoration:none;">Open authoritative release notes</a></div>',
+        ])
+    action = item.get("proposed_action")
+    if action:
+        html_parts.extend([
+            '<div style="margin-top:16px;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#61706d;">Proposed action</div>',
+            f'<pre style="margin:6px 0 0 0;padding:10px 12px;overflow-wrap:anywhere;white-space:pre-wrap;border:1px solid #d9dfdf;border-radius:3px;background:#f4f6f5;font-family:Consolas,\'Courier New\',monospace;font-size:12px;line-height:18px;color:#172321;">{html.escape(str(action))}</pre>',
+        ])
+    html_parts.extend(['</td></tr></table>'])
+    return "".join(html_parts)
+
 def format_email(findings: Sequence[Mapping[str, Any]], today: date | None = None) -> tuple[str, str, str]:
     highest = next((status for status in ACTIONABLE if any(item["status"] == status for item in findings)), "UPDATE")
-    subject = f"Toolchain Update Watch  {highest}  {(today or date.today()).isoformat()}"
-    text_lines, html_parts = ["Toolchain Update Watch", "", "Only new or materially changed actionable findings are listed."], ["<h1>Toolchain Update Watch</h1><p>Only new or materially changed actionable findings are listed.</p>"]
+    audit_date = (today or date.today()).isoformat()
+    subject = f"Toolchain Update Watch  {highest}  {audit_date}"
+    summary = _severity_summary(findings)
+    text_lines = ["Toolchain Update Watch", f"Audit date: {audit_date}", f"{len(findings)} actionable finding(s): {summary}", "", "Only new or materially changed actionable findings are listed."]
+    html_parts = [
+        '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;padding:0;background:#eef1f0;">',
+        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#eef1f0;"><tr><td align="center" style="padding:24px 12px;">',
+        '<table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;table-layout:fixed;border:1px solid #d9dfdf;background:#ffffff;">',
+        '<tr><td style="padding:24px 24px 20px 24px;border-bottom:1px solid #d9dfdf;background:#f7f8f7;">',
+        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;font-weight:700;letter-spacing:1.2px;color:#4f625e;">WHITE GULL &nbsp; AGENT PLATFORM</div>',
+        '<div style="margin-top:7px;font-family:Arial,Helvetica,sans-serif;font-size:26px;line-height:32px;font-weight:700;color:#172321;">Toolchain Update Watch</div>',
+        f'<div style="margin-top:6px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:19px;color:#61706d;">Audit date: {audit_date}</div>',
+        '</td></tr>',
+        '<tr><td style="padding:18px 24px;border-bottom:1px solid #d9dfdf;">',
+        f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:22px;font-weight:700;color:#172321;">{len(findings)} actionable finding(s)</div>',
+        f'<div style="margin-top:3px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:19px;color:#61706d;">{summary}</div>',
+        '</td></tr>',
+        '<tr><td style="padding:24px;">',
+    ]
     for status in ACTIONABLE:
         members = [item for item in findings if item["status"] == status]
         if not members: continue
-        text_lines.extend(["", status]); html_parts.extend([f"<h2>{status}</h2><ul>"])
+        accent, tint, border = _severity_style(status)
+        text_lines.extend(["", status])
+        html_parts.extend([
+            f'<div style="margin:{"0" if status == ACTIONABLE[0] else "20px"} 0 10px 0;padding:8px 10px;border-left:4px solid {accent};background:{tint};font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;font-weight:700;letter-spacing:0.7px;color:{accent};">{status} &nbsp; {len(members)} finding(s)</div>',
+        ])
         for item in members:
             action = item.get("proposed_action")
             release_url = item.get("release_url")
@@ -88,14 +159,12 @@ def format_email(findings: Sequence[Mapping[str, Any]], today: date | None = Non
                 text_lines.extend(["", "  What changed:", f"  {release_url}"])
             if action:
                 text_lines.extend(["", "  Proposed action:", f"  {action}"])
-            html_item = f"<li><strong>{html.escape(str(item['name']))}</strong><br>Installed: {html.escape(str(item.get('installed_version') or '?'))}<br>Latest: {html.escape(str(item.get('latest_version') or '?'))}<br>Health: {html.escape(str(item.get('health') or '?'))}"
-            if release_url:
-                safe_url = html.escape(str(release_url), quote=True)
-                html_item += f'<br><a href="{safe_url}">What changed</a>'
-            if action:
-                html_item += f"<br>Proposed action: <code>{html.escape(str(action))}</code>"
-            html_parts.append(html_item + "</li>")
-        html_parts.append("</ul>")
+            html_parts.append(_email_card(item))
+    html_parts.extend([
+        '</td></tr>',
+        '<tr><td style="padding:16px 24px;border-top:1px solid #d9dfdf;background:#f7f8f7;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:17px;color:#61706d;">Toolchain Update Watch &nbsp; Agent Platform<br>Automated read-only workstation audit</td></tr>',
+        '</table></td></tr></table></body></html>',
+    ])
     return subject, "\n".join(text_lines), "".join(html_parts)
 
 def telegram_notify(result: str, state: str = "COMPLETE", run_process: RunProcess = subprocess.run) -> bool:
