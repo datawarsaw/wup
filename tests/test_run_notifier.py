@@ -12,13 +12,13 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path: sys.path.insert(0, str(SCRIPTS_DIR))
 from run_notifier import actionable_findings, execute, format_email, format_telegram_result
 
-def report(latest_opencodex: str = "2.34.0"):
+def report(latest_opencodex: str = "2.34.0", release_url: str = "https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.34.0"):
     return {"tools": [
-        {"name": "OpenCodex", "status": "UPDATE", "installed_version": "2.31.0", "latest_version": latest_opencodex, "health": "HEALTHY", "update_recommendation": {"proposed_command": "npm install -g @bitkyc08/opencodex@2.34.0"}},
-        {"name": "Wrangler", "status": "UPDATE", "installed_version": "4.30.0", "latest_version": "4.32.0", "health": "HEALTHY"},
-        {"name": "Node.js", "status": "WATCH", "installed_version": "22.0.0", "latest_version": "22.1.0", "health": "HEALTHY"},
-        {"name": "Python", "status": "WATCH", "installed_version": "3.13.0", "latest_version": "3.13.1", "health": "HEALTHY"},
-        {"name": "Git", "status": "WATCH", "installed_version": "2.51.0", "latest_version": "2.52.0", "health": "HEALTHY"},
+        {"name": "OpenCodex", "status": "UPDATE", "installed_version": "2.31.0", "latest_version": latest_opencodex, "health": "HEALTHY", "release_url": release_url, "update_recommendation": {"proposed_command": "npm install -g @bitkyc08/opencodex@2.34.0"}},
+        {"name": "Wrangler", "status": "UPDATE", "installed_version": "4.30.0", "latest_version": "4.32.0", "health": "HEALTHY", "release_url": "https://www.npmjs.com/package/wrangler/v/4.32.0"},
+        {"name": "Node.js", "status": "WATCH", "installed_version": "22.0.0", "latest_version": "22.1.0", "health": "HEALTHY", "release_url": "https://nodejs.org/dist/v22.1.0/"},
+        {"name": "Python", "status": "WATCH", "installed_version": "3.13.0", "latest_version": "3.13.1", "health": "HEALTHY", "release_url": "https://docs.python.org/3.13/whatsnew/"},
+        {"name": "Git", "status": "WATCH", "installed_version": "2.51.0", "latest_version": "2.52.0", "health": "HEALTHY", "release_url": "https://github.com/git-for-windows/git/releases"},
         {"name": "Codex CLI", "status": "CURRENT", "installed_version": "1", "latest_version": "1", "health": "HEALTHY"},
         {"name": "LM Studio", "status": "UNKNOWN", "installed_version": "x", "latest_version": "unknown", "health": "UNVERIFIED"}]}
 
@@ -32,7 +32,14 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(subject, "Toolchain Update Watch  UPDATE  2026-08-28")
         self.assertIn("URGENT", text) if "URGENT" in text else None
         self.assertIn("npm install", text); self.assertIn("<h2>UPDATE</h2>", html)
+        self.assertIn("What changed:", text); self.assertIn("https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.34.0", text)
+        self.assertIn('href="https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.34.0"', html)
         self.assertNotIn("CURRENT", text); self.assertNotIn("LM Studio", text)
+
+    def test_email_escapes_a_trustworthy_url_safely(self):
+        findings = actionable_findings(report(release_url='https://example.test/?q="quoted"'))
+        _, _, html = format_email(findings)
+        self.assertIn('href="https://example.test/?q=&quot;quoted&quot;"', html)
 
     def test_first_run_no_change_and_material_change(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -63,6 +70,15 @@ class RunnerTests(unittest.TestCase):
             state, called = Path(temp) / "state.json", []
             self.assertEqual(execute(state, dry_run=True, audit_runner=report, telegram_sender=lambda *_: called.append(True), email_sender=lambda *_: called.append(True)), 0)
             self.assertFalse(state.exists()); self.assertEqual(called, [])
+
+    def test_release_url_is_informational_and_does_not_trigger_duplicate_alert(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state, telegram, email = Path(temp) / "state.json", [], []
+            sender = lambda result: telegram.append(result) or True
+            mailer = lambda *args: email.append(args) or True
+            self.assertEqual(execute(state, audit_runner=report, telegram_sender=sender, email_sender=mailer), 0)
+            self.assertEqual(execute(state, audit_runner=lambda: report(release_url="https://example.invalid/corrected"), telegram_sender=sender, email_sender=mailer), 0)
+            self.assertEqual((len(telegram), len(email)), (1, 1))
 
     def test_failed_audit_preserves_state_and_attempts_failed_telegram(self):
         with tempfile.TemporaryDirectory() as temp:

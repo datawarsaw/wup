@@ -110,6 +110,7 @@ class ToolCheckResult:
     health: str  # HEALTHY, DEGRADED, UNVERIFIED, NOT_INSTALLED
     attention_notes: List[str] = field(default_factory=list)
     update_recommendation: Optional[UpdateRecommendation] = None
+    release_url: Optional[str] = None
     is_bundled: bool = False
     runtime_type: str = "system"  # system, bundled, managed_mcp, app_package
 
@@ -1302,6 +1303,37 @@ class ToolchainAuditor:
             update_recommendation=rec,
         )
 
+    @staticmethod
+    def release_url_for(result: ToolCheckResult) -> Optional[str]:
+        """Return only deterministic, authoritative release metadata for actionable findings."""
+        if result.status not in ("URGENT", "UPDATE", "WATCH"):
+            return None
+        version = result.latest_version
+        parsed = SemVer.parse(version)
+        if not parsed or not version:
+            return None
+        normalized = ".".join(str(part) for part in parsed.parts[:3])
+        package_pages = {
+            "Codex CLI": "@openai/codex",
+            "OpenCodex": "@bitkyc08/opencodex",
+            "Wrangler": "wrangler",
+        }
+        if result.name in package_pages:
+            return f"https://www.npmjs.com/package/{package_pages[result.name]}/v/{normalized}"
+        if result.name == "Node.js":
+            if "nodejs.org release index" in result.latest_source:
+                return f"https://nodejs.org/en/blog/release/v{normalized}"
+            return f"https://nodejs.org/dist/v{normalized}/"
+        if result.name == "Python" and len(parsed.parts) >= 2:
+            return f"https://www.python.org/downloads/release/python-{normalized.replace('.', '')}/"
+        if result.name == "npm":
+            if "npm registry" in result.latest_source:
+                return f"https://github.com/npm/cli/releases/tag/v{normalized}"
+            return "https://www.npmjs.com/package/npm"
+        if result.name == "Git":
+            return "https://github.com/git-for-windows/git/releases"
+        return None
+
     # Full audit runner
     def audit_all(self) -> ToolchainAuditReport:
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -1337,6 +1369,9 @@ class ToolchainAuditor:
         tools.append(git_res)
         tools.append(lms_res)
         tools.append(wrangler_res)
+
+        for tool in tools:
+            tool.release_url = self.release_url_for(tool)
 
         core_health = "HEALTHY"
         if codex_res.health == "DEGRADED" or ocx_res.health == "DEGRADED" or shims_res.health == "DEGRADED":

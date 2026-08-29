@@ -560,5 +560,36 @@ class TestNoHardcodedDate(unittest.TestCase):
         self.assertTrue(report.timestamp.startswith(expected_date))
 
 
+class TestReleaseLinks(unittest.TestCase):
+    def test_actionable_supported_tools_receive_authoritative_links(self):
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=make_mock_runner())
+        cases = [
+            ("Codex CLI", "2.0.0", "test", "https://www.npmjs.com/package/@openai/codex/v/2.0.0"),
+            ("OpenCodex", "2.0.0", "test", "https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.0.0"),
+            ("Node.js", "22.1.0", "nodejs.org release index", "https://nodejs.org/en/blog/release/v22.1.0"),
+            ("npm", "12.0.2", "npm registry (npm)", "https://github.com/npm/cli/releases/tag/v12.0.2"),
+            ("Python", "3.13.1", "test", "https://www.python.org/downloads/release/python-3131/"),
+            ("Git", "2.52.0", "test", "https://github.com/git-for-windows/git/releases"),
+            ("Wrangler", "4.0.0", "test", "https://www.npmjs.com/package/wrangler/v/4.0.0"),
+        ]
+        for name, version, latest_source, expected in cases:
+            result = ToolCheckResult(name=name, installed_version="1.0.0", install_method="test", latest_version=version, latest_source=latest_source, status="UPDATE", health="HEALTHY")
+            self.assertEqual(auditor.release_url_for(result), expected)
+
+    def test_release_link_fallbacks_are_authoritative(self):
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=make_mock_runner())
+        node = ToolCheckResult(name="Node.js", installed_version="22.0.0", install_method="test", latest_version="22.1.0", latest_source="test fallback", status="WATCH", health="HEALTHY")
+        npm = ToolCheckResult(name="npm", installed_version="11.0.0", install_method="test", latest_version="12.0.2", latest_source="test fallback", status="WATCH", health="HEALTHY")
+        self.assertEqual(auditor.release_url_for(node), "https://nodejs.org/dist/v22.1.0/")
+        self.assertEqual(auditor.release_url_for(npm), "https://www.npmjs.com/package/npm")
+
+    def test_unsupported_or_non_actionable_links_are_omitted(self):
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=make_mock_runner())
+        result = ToolCheckResult(name="LM Studio", installed_version="1.0.0", install_method="test", latest_version="2.0.0", latest_source="test", status="UPDATE", health="HEALTHY")
+        self.assertIsNone(auditor.release_url_for(result))
+        result.status = "CURRENT"
+        self.assertIsNone(auditor.release_url_for(result))
+
+
 if __name__ == "__main__":
     unittest.main()

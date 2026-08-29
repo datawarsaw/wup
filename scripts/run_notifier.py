@@ -45,6 +45,9 @@ def actionable_findings(report: Mapping[str, Any]) -> List[Dict[str, Any]]:
         if raw.get("status") in ACTIONABLE:
             if not isinstance(raw.get("name"), str) or not raw["name"]: raise AuditError("actionable audit finding is missing a tool name")
             item = signature(raw)
+            release_url = raw.get("release_url")
+            if isinstance(release_url, str) and release_url.startswith("https://"):
+                item["release_url"] = release_url
             recommendation = raw.get("update_recommendation")
             if isinstance(recommendation, dict) and isinstance(recommendation.get("proposed_command"), str): item["proposed_action"] = recommendation["proposed_command"]
             findings.append(item)
@@ -79,8 +82,19 @@ def format_email(findings: Sequence[Mapping[str, Any]], today: date | None = Non
         text_lines.extend(["", status]); html_parts.extend([f"<h2>{status}</h2><ul>"])
         for item in members:
             action = item.get("proposed_action")
-            text_lines.append(f"- {item['name']}: installed {item.get('installed_version') or '?'}; latest {item.get('latest_version') or '?'}; health {item.get('health') or '?'}" + (f"; proposed action: {action}" if action else ""))
-            html_parts.append(f"<li><strong>{html.escape(str(item['name']))}</strong>: installed {html.escape(str(item.get('installed_version') or '?'))}; latest {html.escape(str(item.get('latest_version') or '?'))}; health {html.escape(str(item.get('health') or '?'))}" + (f"<br>Proposed action: <code>{html.escape(str(action))}</code>" if action else "") + "</li>")
+            release_url = item.get("release_url")
+            text_lines.extend([f"- {item['name']}", f"  Installed: {item.get('installed_version') or '?'}", f"  Latest: {item.get('latest_version') or '?'}", f"  Health: {item.get('health') or '?'}"])
+            if release_url:
+                text_lines.extend(["", "  What changed:", f"  {release_url}"])
+            if action:
+                text_lines.extend(["", "  Proposed action:", f"  {action}"])
+            html_item = f"<li><strong>{html.escape(str(item['name']))}</strong><br>Installed: {html.escape(str(item.get('installed_version') or '?'))}<br>Latest: {html.escape(str(item.get('latest_version') or '?'))}<br>Health: {html.escape(str(item.get('health') or '?'))}"
+            if release_url:
+                safe_url = html.escape(str(release_url), quote=True)
+                html_item += f'<br><a href="{safe_url}">What changed</a>'
+            if action:
+                html_item += f"<br>Proposed action: <code>{html.escape(str(action))}</code>"
+            html_parts.append(html_item + "</li>")
         html_parts.append("</ul>")
     return subject, "\n".join(text_lines), "".join(html_parts)
 

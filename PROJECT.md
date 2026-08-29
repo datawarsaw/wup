@@ -18,7 +18,7 @@ The helper path may be overridden with `WORKSTATION_OPS_EMAIL_HELPER`; the defau
 
 ## Notification architecture
 
-Telegram and Cloudflare Email receive the same changed actionable findings. Telegram is attempted first. If email fails after Telegram succeeds, the notifier records the Telegram signatures as pending while retaining the previous full-success state; a later retry avoids duplicate Telegram delivery and retries email. An audit failure can emit a Telegram failure signal, but does not overwrite good deduplication state.
+Telegram and Cloudflare Email receive the same changed actionable findings. Email additionally renders deterministic authoritative release metadata when it is available; Telegram remains compact. Release URLs are informational and excluded from the deduplication signature. Telegram is attempted first. If email fails after Telegram succeeds, the notifier records the Telegram signatures as pending while retaining the previous full-success state; a later retry avoids duplicate Telegram delivery and retries email. An audit failure can emit a Telegram failure signal, but does not overwrite good deduplication state.
 
 ## Runtime state
 

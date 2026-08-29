@@ -46,6 +46,8 @@ The notifier sends the same changed finding set to:
 
 The notifier saves successful alert signatures at `%LOCALAPPDATA%\WhiteGull\toolchain-update-watch\last-alerted.json`. It alerts only for a new finding or a changed status/version/health signature. If Telegram succeeds and email fails, it records pending Telegram delivery while retaining the last fully successful state, so a retry does not duplicate Telegram but still retries email.
 
+Email includes an authoritative release, package, or changelog link when the audit can derive one deterministically from its verified release source. Node.js, Python, and npm prefer their direct version-specific release content; package or download pages are retained only as deterministic fallbacks. These links are informational and are not part of the deduplication signature, so a corrected link alone never creates another alert. Telegram remains compact and does not include per-tool links.
+
 ## Configuration and secrets
 
 This repository contains no alert credentials or runtime state. Telegram configuration belongs to `telegram-notify`'s local secret boundary. Cloudflare Email reads its API token and account ID from the existing external `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` environment values; its configured sender and fixed recipient come from local Workstation Ops configuration or `WORKSTATION_OPS_EMAIL_FROM` / `WORKSTATION_OPS_EMAIL_TO`. The helper does not accept a recipient override.
