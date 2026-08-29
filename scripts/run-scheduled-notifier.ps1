@@ -6,7 +6,10 @@ param(
 
   [Parameter(Mandatory = $true)]
   [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
-  [string]$NodePath
+  [string]$NodePath,
+  [Parameter(Mandatory = $true)]
+  [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
+  [string]$ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,5 +19,6 @@ if (-not (Test-Path -LiteralPath $notifier -PathType Leaf)) { throw "Toolchain n
 
 # Scheduled Task environments do not reliably inherit interactive PATH entries.
 $env:PATH = "$(Split-Path -Parent $NodePath);$(Split-Path -Parent $PythonPath);$env:PATH"
-& $PythonPath $notifier
+$env:WUP_CONFIG = (Resolve-Path -LiteralPath $ConfigPath).Path
+& $PythonPath $notifier --config $env:WUP_CONFIG
 exit $LASTEXITCODE

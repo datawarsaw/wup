@@ -1,7 +1,6 @@
 """Small explicit WUP configuration model.
 
-Configuration is optional.  Credentials remain in environment variables or an
-external transport; this module intentionally never reads secret files.
+Configuration is optional. Credentials remain outside Git.
 """
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ from typing import Any, Mapping
 DEFAULT_CONFIG: dict[str, Any] = {
     "tools": {"enabled": []},
     "local": {"state_dir": ""},
-    "notifications": {"telegram": {"enabled": False}, "email": {"command": ""}},
+    "notifications": {"telegram": {"enabled": False, "env_file": ""}, "email": {"command": ""}},
     "remote": {"repository": "", "state_branch": "toolchain-remote-state", "publish_snapshot": False},
 }
 
@@ -47,9 +46,10 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
         if isinstance(value.get(section), Mapping):
             config[section].update(value[section])
     if isinstance(config["notifications"].get("telegram"), Mapping):
-        config["notifications"]["telegram"] = {"enabled": bool(config["notifications"]["telegram"].get("enabled", False))}
+        telegram = config["notifications"]["telegram"]
+        config["notifications"]["telegram"] = {"enabled": bool(telegram.get("enabled", False)), "env_file": str(telegram.get("env_file", ""))}
     else:
-        config["notifications"]["telegram"] = {"enabled": False}
+        config["notifications"]["telegram"] = {"enabled": False, "env_file": ""}
     if not isinstance(config["tools"].get("enabled"), list) or not all(isinstance(item, str) for item in config["tools"]["enabled"]):
         raise ValueError("tools.enabled must be an array of tool names")
     return config
@@ -61,6 +61,7 @@ def apply_runtime_config(config: Mapping[str, Any]) -> None:
     os.environ["WUP_STATE_BRANCH"] = str(remote.get("state_branch") or "toolchain-remote-state")
     os.environ["WUP_SNAPSHOT_PUBLISH"] = "1" if remote.get("publish_snapshot") else "0"
     os.environ["WUP_TELEGRAM_ENABLED"] = "1" if config["notifications"]["telegram"].get("enabled") else "0"
+    if config["notifications"]["telegram"].get("env_file"): os.environ["WUP_TELEGRAM_ENV_FILE"] = str(config["notifications"]["telegram"]["env_file"])
     os.environ["WUP_ENABLED_TOOLS"] = ",".join(config["tools"].get("enabled", []))
     if config["notifications"].get("email", {}).get("command"):
         os.environ["WUP_EMAIL_COMMAND"] = str(config["notifications"]["email"]["command"])

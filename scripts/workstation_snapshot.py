@@ -1,7 +1,6 @@
 """Sanitized local installed-version snapshot and best-effort GitHub publisher."""
 from __future__ import annotations
 
-import base64
 import datetime as dt
 import json
 import re
@@ -39,24 +38,15 @@ def build_snapshot(report: Mapping[str, Any]) -> dict[str, Any]:
     return {"version": SNAPSHOT_VERSION, "measured_at": measured_at, "tools": snapshot_tools}
 
 
-def publish_snapshot(snapshot: Mapping[str, Any], run_process: RunProcess = subprocess.run, attempts: int = 2, repository: str | None = None, state_branch: str | None = None) -> bool:
-    """Update only workstation-snapshot.json; retries a GitHub content conflict once."""
-    content = base64.b64encode((json.dumps(snapshot, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")).decode("ascii")
+def publish_snapshot(snapshot: Mapping[str, Any], run_process: RunProcess = subprocess.run, attempts: int = 2, repository: str | None = None) -> bool:
+    """Best-effort private snapshot publication through a GitHub Actions secret."""
+    content = json.dumps(snapshot, sort_keys=True, separators=(",", ":")) + "\n"
     repository = repository or os.environ.get("WUP_REMOTE_REPOSITORY", "")
-    state_branch = state_branch or os.environ.get("WUP_STATE_BRANCH", "toolchain-remote-state")
     if not repository or "/" not in repository:
         return False
-    endpoint = f"repos/{repository}/contents/workstation-snapshot.json"
     for _ in range(attempts):
         try:
-            current = run_process(["gh", "api", endpoint, "--method", "GET", "-f", f"ref={state_branch}", "--jq", ".sha"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=GH_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            return False
-        args = ["gh", "api", endpoint, "--method", "PUT", "-f", f"branch={state_branch}", "-f", "message=chore: record workstation snapshot", "-f", f"content={content}"]
-        if current.returncode == 0 and current.stdout.strip():
-            args.extend(["-f", f"sha={current.stdout.strip()}"])
-        try:
-            result = run_process(args, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=GH_TIMEOUT_SECONDS)
+            result = run_process(["gh", "secret", "set", "WUP_WORKSTATION_SNAPSHOT", "--repo", repository], input=content, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=GH_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             continue
         if result.returncode == 0:

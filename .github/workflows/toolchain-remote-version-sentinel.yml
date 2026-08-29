@@ -37,12 +37,14 @@ jobs:
       - name: Observe upstream versions
         if: ${{ github.event_name != 'workflow_dispatch' || !inputs.send_test_notification }}
         id: sentinel
+        env:
+          WUP_WORKSTATION_SNAPSHOT: ${{ secrets.WUP_WORKSTATION_SNAPSHOT }}
         run: |
           git fetch origin toolchain-remote-state || true
           state="$RUNNER_TEMP/remote-version-state.json"
           snapshot="$RUNNER_TEMP/workstation-snapshot.json"
           if git show origin/toolchain-remote-state:remote-version-state.json > "$state" 2>/dev/null; then true; else rm -f "$state"; fi
-          if git show origin/toolchain-remote-state:workstation-snapshot.json > "$snapshot" 2>/dev/null; then true; else rm -f "$snapshot"; fi
+          if [ -n "${WUP_WORKSTATION_SNAPSHOT:-}" ]; then printf '%s' "$WUP_WORKSTATION_SNAPSHOT" > "$snapshot"; else rm -f "$snapshot"; fi
           python scripts/remote_version_sentinel.py --state-path "$state" --snapshot-path "$snapshot" --json > "$RUNNER_TEMP/result.json"
           cat "$RUNNER_TEMP/result.json"
           echo "state_changed=$(python -c 'import json; print(str(json.load(open("'"$RUNNER_TEMP"'/result.json"))["state_changed"]).lower())')" >> "$GITHUB_OUTPUT"
