@@ -71,7 +71,9 @@ if ($Action -eq 'Run') {
 
 $validationName = "$TaskName Scheduler Validation"
 try {
-  $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File $(Quote-TaskArgument $validator) -NodePath $(Quote-TaskArgument $resolvedNode)"
+  $configCandidate = if ($ConfigPath) { $ConfigPath } else { $defaultConfig }
+  $resolvedConfig = Resolve-Executable $configCandidate 'unused'
+  $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File $(Quote-TaskArgument $validator) -PythonPath $(Quote-TaskArgument $resolvedPython) -NodePath $(Quote-TaskArgument $resolvedNode) -ConfigPath $(Quote-TaskArgument $resolvedConfig)"
   $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
   $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
   Register-ScheduledTask -TaskName $validationName -Action (New-ScheduledTaskAction -Execute $powerShell -Argument $arguments) -Settings $settings -Principal $principal -Force | Out-Null
