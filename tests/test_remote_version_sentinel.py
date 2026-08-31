@@ -4,12 +4,20 @@ import tempfile
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from check_toolchain import REMOTE_TOOL_PROVIDER_REGISTRY, REMOTE_VERSION_SOURCES, NetworkFetcher, resolve_remote_upstream_versions
+from check_toolchain import (
+    REMOTE_RESOLVER_HANDLERS,
+    REMOTE_TOOL_PROVIDER_REGISTRY,
+    REMOTE_VERSION_SOURCES,
+    NetworkFetcher,
+    RemoteToolProvider,
+    resolve_remote_upstream_versions,
+)
 from remote_version_sentinel import SentinelError, evaluate, read_snapshot, read_state, telegram_result, telegram_result_with_snapshot
 from workstation_snapshot import SNAPSHOT_TOOLS, build_snapshot, publish_snapshot
 from run_notifier import execute
@@ -76,6 +84,12 @@ class RemoteSentinelTests(unittest.TestCase):
         self.assertEqual(
             [provider.name for provider in sorted(REMOTE_TOOL_PROVIDER_REGISTRY, key=lambda provider: provider.fetch_order)],
             ["Codex CLI", "OpenCodex", "npm", "Wrangler", "Node.js", "Git", "Bun"],
+        )
+
+    def test_static_resolver_handlers_cover_all_registry_resolvers(self):
+        self.assertEqual(
+            set(REMOTE_RESOLVER_HANDLERS),
+            {provider.resolver for provider in REMOTE_TOOL_PROVIDER_REGISTRY},
         )
 
     def test_generated_state_has_no_secret_material(self):
@@ -152,4 +166,14 @@ class RemoteSentinelTests(unittest.TestCase):
         versions, failures = resolve_remote_upstream_versions(NetworkFetcher(mock_data=data))
         self.assertEqual(failures, {})
         self.assertEqual(set(versions), set(REMOTE_VERSION_SOURCES))
+        self.assertEqual(versions["Codex CLI"], {"latest_version": "1.0.0", "release_url": "https://www.npmjs.com/package/@openai/codex/v/1.0.0"})
         self.assertEqual(versions["Node.js"]["latest_version"], "24.20.0")
+        self.assertEqual(versions["Node.js"]["release_url"], "https://nodejs.org/en/blog/release/v24.20.0")
+        self.assertEqual(versions["Git"], {"latest_version": "2.52.0", "release_url": "https://github.com/git-for-windows/git/releases/tag/v2.52.0.windows.1"})
+
+    def test_unknown_resolver_fails_closed_deterministically(self):
+        provider = RemoteToolProvider("Unknown", "https://example.test/unknown", "unknown", "https://example.test/releases", 0)
+        with patch("check_toolchain.REMOTE_TOOL_PROVIDER_REGISTRY", (provider,)):
+            versions, failures = resolve_remote_upstream_versions(NetworkFetcher(mock_data={provider.source: {}}))
+        self.assertEqual(versions, {})
+        self.assertEqual(failures, {"Unknown": "unsupported remote resolver: unknown"})
