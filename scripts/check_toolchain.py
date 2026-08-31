@@ -196,15 +196,31 @@ class NetworkFetcher:
             return None
 
 
-REMOTE_VERSION_SOURCES = {
-    "Codex CLI": "https://registry.npmjs.org/@openai/codex/latest",
-    "OpenCodex": "https://registry.npmjs.org/@bitkyc08/opencodex/latest",
-    "Node.js": "https://nodejs.org/dist/index.json",
-    "npm": "https://registry.npmjs.org/npm/latest",
-    "Git": "https://api.github.com/repos/git-for-windows/git/releases/latest",
-    "Wrangler": "https://registry.npmjs.org/wrangler/latest",
-    "Bun": "https://api.github.com/repos/oven-sh/bun/releases/latest",
-}
+@dataclass(frozen=True)
+class RemoteToolProvider:
+    """Static upstream-version resolver metadata for one monitored tool."""
+
+    name: str
+    source: str
+    resolver: str
+    release_url_template: str
+    fetch_order: int
+
+
+# This catalog is intentionally static: it describes the existing upstream-only
+# providers and dispatches only to the bounded resolver types below.
+REMOTE_TOOL_PROVIDER_REGISTRY = (
+    RemoteToolProvider("Codex CLI", "https://registry.npmjs.org/@openai/codex/latest", "npm_latest", "https://www.npmjs.com/package/@openai/codex/v/{version}", 0),
+    RemoteToolProvider("OpenCodex", "https://registry.npmjs.org/@bitkyc08/opencodex/latest", "npm_latest", "https://www.npmjs.com/package/@bitkyc08/opencodex/v/{version}", 1),
+    RemoteToolProvider("Node.js", "https://nodejs.org/dist/index.json", "node_stable", "https://nodejs.org/en/blog/release/v{version}", 4),
+    RemoteToolProvider("npm", "https://registry.npmjs.org/npm/latest", "npm_latest", "https://github.com/npm/cli/releases/tag/v{version}", 2),
+    RemoteToolProvider("Git", "https://api.github.com/repos/git-for-windows/git/releases/latest", "github_release", "https://github.com/git-for-windows/git/releases", 5),
+    RemoteToolProvider("Wrangler", "https://registry.npmjs.org/wrangler/latest", "npm_latest", "https://www.npmjs.com/package/wrangler/v/{version}", 3),
+    RemoteToolProvider("Bun", "https://api.github.com/repos/oven-sh/bun/releases/latest", "github_release", "https://github.com/oven-sh/bun/releases", 6),
+)
+
+# Kept as the public source mapping used by the remote sentinel.
+REMOTE_VERSION_SOURCES = {provider.name: provider.source for provider in REMOTE_TOOL_PROVIDER_REGISTRY}
 
 
 def resolve_remote_upstream_versions(fetcher: NetworkFetcher) -> Tuple[Dict[str, Dict[str, str]], Dict[str, str]]:
@@ -212,38 +228,33 @@ def resolve_remote_upstream_versions(fetcher: NetworkFetcher) -> Tuple[Dict[str,
     versions: Dict[str, Dict[str, str]] = {}
     failures: Dict[str, str] = {}
 
-    npm_tools = {
-        "Codex CLI": (REMOTE_VERSION_SOURCES["Codex CLI"], "https://www.npmjs.com/package/@openai/codex"),
-        "OpenCodex": (REMOTE_VERSION_SOURCES["OpenCodex"], "https://www.npmjs.com/package/@bitkyc08/opencodex"),
-        "npm": (REMOTE_VERSION_SOURCES["npm"], "https://github.com/npm/cli/releases"),
-        "Wrangler": (REMOTE_VERSION_SOURCES["Wrangler"], "https://www.npmjs.com/package/wrangler"),
-    }
-    for name, (source, page) in npm_tools.items():
-        data = fetcher.fetch_json(source)
-        version = str(data.get("version", "")) if isinstance(data, dict) else ""
-        if SemVer.parse(version):
-            versions[name] = {"latest_version": version, "release_url": f"{page}/v/{version}" if name != "npm" else f"https://github.com/npm/cli/releases/tag/v{version}"}
-        else:
-            failures[name] = "authoritative npm registry response was unavailable or invalid"
-
-    node_data = fetcher.fetch_json(REMOTE_VERSION_SOURCES["Node.js"])
-    if isinstance(node_data, list):
-        version = next((str(item.get("version", "")).lstrip("v") for item in node_data if isinstance(item, dict) and SemVer.parse(str(item.get("version", "")).lstrip("v")) and "-" not in str(item.get("version", ""))), "")
-        if version:
-            versions["Node.js"] = {"latest_version": version, "release_url": f"https://nodejs.org/en/blog/release/v{version}"}
-        else:
-            failures["Node.js"] = "authoritative Node.js release index had no stable release"
-    else:
-        failures["Node.js"] = "authoritative Node.js release index was unavailable or invalid"
-
-    for name, source, fallback in (("Git", REMOTE_VERSION_SOURCES["Git"], "https://github.com/git-for-windows/git/releases"), ("Bun", REMOTE_VERSION_SOURCES["Bun"], "https://github.com/oven-sh/bun/releases")):
-        data = fetcher.fetch_json(source)
-        tag = str(data.get("tag_name", "")) if isinstance(data, dict) else ""
-        match = re.search(r"(\d+\.\d+\.\d+)", tag)
-        if match:
-            versions[name] = {"latest_version": match.group(1), "release_url": str(data.get("html_url") or fallback)}
-        else:
-            failures[name] = "authoritative GitHub release response was unavailable or invalid"
+    for provider in sorted(REMOTE_TOOL_PROVIDER_REGISTRY, key=lambda item: item.fetch_order):
+        data = fetcher.fetch_json(provider.source)
+        if provider.resolver == "npm_latest":
+            version = str(data.get("version", "")) if isinstance(data, dict) else ""
+            if SemVer.parse(version):
+                versions[provider.name] = {
+                    "latest_version": version,
+                    "release_url": provider.release_url_template.format(version=version),
+                }
+            else:
+                failures[provider.name] = "authoritative npm registry response was unavailable or invalid"
+        elif provider.resolver == "node_stable":
+            if isinstance(data, list):
+                version = next((str(item.get("version", "")).lstrip("v") for item in data if isinstance(item, dict) and SemVer.parse(str(item.get("version", "")).lstrip("v")) and "-" not in str(item.get("version", ""))), "")
+                if version:
+                    versions[provider.name] = {"latest_version": version, "release_url": provider.release_url_template.format(version=version)}
+                else:
+                    failures[provider.name] = "authoritative Node.js release index had no stable release"
+            else:
+                failures[provider.name] = "authoritative Node.js release index was unavailable or invalid"
+        elif provider.resolver == "github_release":
+            tag = str(data.get("tag_name", "")) if isinstance(data, dict) else ""
+            match = re.search(r"(\d+\.\d+\.\d+)", tag)
+            if match:
+                versions[provider.name] = {"latest_version": match.group(1), "release_url": str(data.get("html_url") or provider.release_url_template)}
+            else:
+                failures[provider.name] = "authoritative GitHub release response was unavailable or invalid"
     return versions, failures
 
 
@@ -477,7 +488,7 @@ class ToolchainAuditor:
                 ],
             ), diag
 
-        latest_data = self.fetcher.fetch_json("https://registry.npmjs.org/@bitkyc08/opencodex/latest")
+        latest_data = self.fetcher.fetch_json(REMOTE_VERSION_SOURCES["OpenCodex"])
         if latest_data and isinstance(latest_data, dict) and "version" in latest_data:
             latest_version = str(latest_data["version"])
         else:
@@ -601,7 +612,7 @@ class ToolchainAuditor:
                 attention_notes=[detail],
             )
 
-        latest_data = self.fetcher.fetch_json("https://registry.npmjs.org/@openai/codex/latest")
+        latest_data = self.fetcher.fetch_json(REMOTE_VERSION_SOURCES["Codex CLI"])
         if latest_data and isinstance(latest_data, dict) and "version" in latest_data:
             latest_version = str(latest_data["version"])
         else:
@@ -860,7 +871,7 @@ class ToolchainAuditor:
         if "codex" in node_bin.lower() or "appdata" in node_bin.lower():
             attention.append(f"Warning: system node resolves to bundled runtime path: {node_bin}")
 
-        dist_data = self.fetcher.fetch_json("https://nodejs.org/dist/index.json")
+        dist_data = self.fetcher.fetch_json(REMOTE_VERSION_SOURCES["Node.js"])
         if dist_data and isinstance(dist_data, list):
             valid_releases = []
             for item in dist_data:
@@ -944,7 +955,7 @@ class ToolchainAuditor:
                 attention_notes=["npm executable not found"],
             )
 
-        latest_data = self.fetcher.fetch_json("https://registry.npmjs.org/npm/latest")
+        latest_data = self.fetcher.fetch_json(REMOTE_VERSION_SOURCES["npm"])
         if latest_data and isinstance(latest_data, dict) and "version" in latest_data:
             latest_version = str(latest_data["version"])
         else:
@@ -977,7 +988,7 @@ class ToolchainAuditor:
         bun_bin = shutil.which("bun")
         sys_result: ToolCheckResult
 
-        rel_data = self.fetcher.fetch_json("https://api.github.com/repos/oven-sh/bun/releases/latest")
+        rel_data = self.fetcher.fetch_json(REMOTE_VERSION_SOURCES["Bun"])
         latest_bun = None
         latest_source = "GitHub releases (oven-sh/bun)"
         if rel_data and isinstance(rel_data, dict) and "tag_name" in rel_data:
@@ -1203,7 +1214,7 @@ class ToolchainAuditor:
         if "codex-runtimes" in git_bin.lower():
             attention.append(f"Warning: active git points to bundled runtime: {git_bin}")
 
-        rel_data = self.fetcher.fetch_json("https://api.github.com/repos/git-for-windows/git/releases/latest")
+        rel_data = self.fetcher.fetch_json(REMOTE_VERSION_SOURCES["Git"])
         if rel_data and isinstance(rel_data, dict) and "tag_name" in rel_data:
             tag = rel_data["tag_name"].lstrip("v")
             m = re.search(r"(\d+\.\d+\.\d+)", tag)
@@ -1320,7 +1331,7 @@ class ToolchainAuditor:
                 attention_notes=["Wrangler package not found in global npm root"],
             )
 
-        latest_data = self.fetcher.fetch_json("https://registry.npmjs.org/wrangler/latest")
+        latest_data = self.fetcher.fetch_json(REMOTE_VERSION_SOURCES["Wrangler"])
         if latest_data and isinstance(latest_data, dict) and "version" in latest_data:
             latest_version = str(latest_data["version"])
         else:

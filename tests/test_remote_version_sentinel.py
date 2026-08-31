@@ -9,7 +9,7 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from check_toolchain import REMOTE_VERSION_SOURCES, NetworkFetcher, resolve_remote_upstream_versions
+from check_toolchain import REMOTE_TOOL_PROVIDER_REGISTRY, REMOTE_VERSION_SOURCES, NetworkFetcher, resolve_remote_upstream_versions
 from remote_version_sentinel import SentinelError, evaluate, read_snapshot, read_state, telegram_result, telegram_result_with_snapshot
 from workstation_snapshot import SNAPSHOT_TOOLS, build_snapshot, publish_snapshot
 from run_notifier import execute
@@ -55,6 +55,28 @@ class RemoteSentinelTests(unittest.TestCase):
 
     def test_supported_allowlist_reuses_public_sources(self):
         self.assertEqual(set(REMOTE_VERSION_SOURCES), {"Codex CLI", "OpenCodex", "Node.js", "npm", "Git", "Wrangler", "Bun"})
+
+    def test_static_provider_registry_preserves_existing_sources_and_resolvers(self):
+        self.assertEqual(
+            [(provider.name, provider.resolver) for provider in REMOTE_TOOL_PROVIDER_REGISTRY],
+            [
+                ("Codex CLI", "npm_latest"),
+                ("OpenCodex", "npm_latest"),
+                ("Node.js", "node_stable"),
+                ("npm", "npm_latest"),
+                ("Git", "github_release"),
+                ("Wrangler", "npm_latest"),
+                ("Bun", "github_release"),
+            ],
+        )
+        self.assertEqual(
+            {provider.name: provider.source for provider in REMOTE_TOOL_PROVIDER_REGISTRY},
+            REMOTE_VERSION_SOURCES,
+        )
+        self.assertEqual(
+            [provider.name for provider in sorted(REMOTE_TOOL_PROVIDER_REGISTRY, key=lambda provider: provider.fetch_order)],
+            ["Codex CLI", "OpenCodex", "npm", "Wrangler", "Node.js", "Git", "Bun"],
+        )
 
     def test_generated_state_has_no_secret_material(self):
         result = evaluate(None, observed(**{"Codex CLI": "1.0.0"}), {}, "2026-08-29T00:00:00+00:00")
