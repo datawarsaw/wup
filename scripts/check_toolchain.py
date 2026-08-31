@@ -223,6 +223,63 @@ REMOTE_TOOL_PROVIDER_REGISTRY = (
 REMOTE_VERSION_SOURCES = {provider.name: provider.source for provider in REMOTE_TOOL_PROVIDER_REGISTRY}
 
 
+ResolverResult = Tuple[Optional[Dict[str, str]], Optional[str]]
+ResolverHandler = Callable[[RemoteToolProvider, Any], ResolverResult]
+
+
+def resolve_npm_latest(provider: RemoteToolProvider, data: Any) -> ResolverResult:
+    """Resolve a version from an npm package's latest metadata."""
+    version = str(data.get("version", "")) if isinstance(data, dict) else ""
+    if SemVer.parse(version):
+        return {
+            "latest_version": version,
+            "release_url": provider.release_url_template.format(version=version),
+        }, None
+    return None, "authoritative npm registry response was unavailable or invalid"
+
+
+def resolve_node_stable(provider: RemoteToolProvider, data: Any) -> ResolverResult:
+    """Resolve the first stable version from the Node.js release index."""
+    if not isinstance(data, list):
+        return None, "authoritative Node.js release index was unavailable or invalid"
+    version = next(
+        (
+            str(item.get("version", "")).lstrip("v")
+            for item in data
+            if isinstance(item, dict)
+            and SemVer.parse(str(item.get("version", "")).lstrip("v"))
+            and "-" not in str(item.get("version", ""))
+        ),
+        "",
+    )
+    if version:
+        return {
+            "latest_version": version,
+            "release_url": provider.release_url_template.format(version=version),
+        }, None
+    return None, "authoritative Node.js release index had no stable release"
+
+
+def resolve_github_release(provider: RemoteToolProvider, data: Any) -> ResolverResult:
+    """Resolve a version and release URL from GitHub's latest-release metadata."""
+    tag = str(data.get("tag_name", "")) if isinstance(data, dict) else ""
+    match = re.search(r"(\d+\.\d+\.\d+)", tag)
+    if match:
+        return {
+            "latest_version": match.group(1),
+            "release_url": str(data.get("html_url") or provider.release_url_template),
+        }, None
+    return None, "authoritative GitHub release response was unavailable or invalid"
+
+
+# This map is intentionally fixed and in-process; remote resolvers are not plugins.
+REMOTE_RESOLVER_HANDLERS: Dict[str, ResolverHandler] = {
+    "npm_latest": resolve_npm_latest,
+    "node_stable": resolve_node_stable,
+    "github_release": resolve_github_release,
+}
+
+
 def resolve_remote_upstream_versions(fetcher: NetworkFetcher) -> Tuple[Dict[str, Dict[str, str]], Dict[str, str]]:
     """Resolve upstream-only versions without inspecting a workstation executable or runtime."""
     versions: Dict[str, Dict[str, str]] = {}
@@ -230,31 +287,15 @@ def resolve_remote_upstream_versions(fetcher: NetworkFetcher) -> Tuple[Dict[str,
 
     for provider in sorted(REMOTE_TOOL_PROVIDER_REGISTRY, key=lambda item: item.fetch_order):
         data = fetcher.fetch_json(provider.source)
-        if provider.resolver == "npm_latest":
-            version = str(data.get("version", "")) if isinstance(data, dict) else ""
-            if SemVer.parse(version):
-                versions[provider.name] = {
-                    "latest_version": version,
-                    "release_url": provider.release_url_template.format(version=version),
-                }
-            else:
-                failures[provider.name] = "authoritative npm registry response was unavailable or invalid"
-        elif provider.resolver == "node_stable":
-            if isinstance(data, list):
-                version = next((str(item.get("version", "")).lstrip("v") for item in data if isinstance(item, dict) and SemVer.parse(str(item.get("version", "")).lstrip("v")) and "-" not in str(item.get("version", ""))), "")
-                if version:
-                    versions[provider.name] = {"latest_version": version, "release_url": provider.release_url_template.format(version=version)}
-                else:
-                    failures[provider.name] = "authoritative Node.js release index had no stable release"
-            else:
-                failures[provider.name] = "authoritative Node.js release index was unavailable or invalid"
-        elif provider.resolver == "github_release":
-            tag = str(data.get("tag_name", "")) if isinstance(data, dict) else ""
-            match = re.search(r"(\d+\.\d+\.\d+)", tag)
-            if match:
-                versions[provider.name] = {"latest_version": match.group(1), "release_url": str(data.get("html_url") or provider.release_url_template)}
-            else:
-                failures[provider.name] = "authoritative GitHub release response was unavailable or invalid"
+        handler = REMOTE_RESOLVER_HANDLERS.get(provider.resolver)
+        if handler is None:
+            failures[provider.name] = f"unsupported remote resolver: {provider.resolver}"
+            continue
+        resolved, failure = handler(provider, data)
+        if resolved is not None:
+            versions[provider.name] = resolved
+        else:
+            failures[provider.name] = failure or "remote resolver failed without a failure reason"
     return versions, failures
 
 
