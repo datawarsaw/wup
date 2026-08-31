@@ -4,7 +4,7 @@ import tempfile
 import os
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS) not in sys.path:
@@ -17,6 +17,7 @@ from check_toolchain import (
     NetworkFetcher,
     RemoteToolProvider,
     resolve_remote_upstream_versions,
+    validate_remote_provider_registry,
 )
 from remote_version_sentinel import SentinelError, evaluate, read_snapshot, read_state, telegram_result, telegram_result_with_snapshot
 from workstation_snapshot import SNAPSHOT_TOOLS, build_snapshot, publish_snapshot
@@ -91,6 +92,9 @@ class RemoteSentinelTests(unittest.TestCase):
             set(REMOTE_RESOLVER_HANDLERS),
             {provider.resolver for provider in REMOTE_TOOL_PROVIDER_REGISTRY},
         )
+
+    def test_static_provider_registry_passes_integrity_validation(self):
+        validate_remote_provider_registry(REMOTE_TOOL_PROVIDER_REGISTRY, REMOTE_RESOLVER_HANDLERS)
 
     def test_generated_state_has_no_secret_material(self):
         result = evaluate(None, observed(**{"Codex CLI": "1.0.0"}), {}, "2026-08-29T00:00:00+00:00")
@@ -171,9 +175,47 @@ class RemoteSentinelTests(unittest.TestCase):
         self.assertEqual(versions["Node.js"]["release_url"], "https://nodejs.org/en/blog/release/v24.20.0")
         self.assertEqual(versions["Git"], {"latest_version": "2.52.0", "release_url": "https://github.com/git-for-windows/git/releases/tag/v2.52.0.windows.1"})
 
-    def test_unknown_resolver_fails_closed_deterministically(self):
+    def test_duplicate_provider_name_fails_validation_before_fetch(self):
+        registry = (
+            RemoteToolProvider("Duplicate", "https://example.test/one", "npm_latest", "https://example.test/releases/{version}", 0),
+            RemoteToolProvider("Duplicate", "https://example.test/two", "npm_latest", "https://example.test/releases/{version}", 1),
+        )
+        fetcher = Mock()
+        with patch("check_toolchain.REMOTE_TOOL_PROVIDER_REGISTRY", registry):
+            with self.assertRaisesRegex(ValueError, "duplicate provider name: Duplicate"):
+                resolve_remote_upstream_versions(fetcher)
+        fetcher.fetch_json.assert_not_called()
+
+    def test_duplicate_fetch_order_fails_validation_before_fetch(self):
+        registry = (
+            RemoteToolProvider("One", "https://example.test/one", "npm_latest", "https://example.test/releases/{version}", 0),
+            RemoteToolProvider("Two", "https://example.test/two", "npm_latest", "https://example.test/releases/{version}", 0),
+        )
+        fetcher = Mock()
+        with patch("check_toolchain.REMOTE_TOOL_PROVIDER_REGISTRY", registry):
+            with self.assertRaisesRegex(ValueError, "duplicate fetch order: 0"):
+                resolve_remote_upstream_versions(fetcher)
+        fetcher.fetch_json.assert_not_called()
+
+    def test_unknown_resolver_fails_validation_before_fetch(self):
         provider = RemoteToolProvider("Unknown", "https://example.test/unknown", "unknown", "https://example.test/releases", 0)
+        fetcher = Mock()
         with patch("check_toolchain.REMOTE_TOOL_PROVIDER_REGISTRY", (provider,)):
-            versions, failures = resolve_remote_upstream_versions(NetworkFetcher(mock_data={provider.source: {}}))
-        self.assertEqual(versions, {})
-        self.assertEqual(failures, {"Unknown": "unsupported remote resolver: unknown"})
+            with self.assertRaisesRegex(ValueError, "unsupported resolver: unknown"):
+                resolve_remote_upstream_versions(fetcher)
+        fetcher.fetch_json.assert_not_called()
+
+    def test_empty_required_provider_metadata_fails_validation_before_fetch(self):
+        cases = {
+            "name": (RemoteToolProvider("", "https://example.test/source", "npm_latest", "https://example.test/releases/{version}", 0), "empty provider name"),
+            "source": (RemoteToolProvider("Empty source", "", "npm_latest", "https://example.test/releases/{version}", 0), "empty source"),
+            "release URL template": (RemoteToolProvider("Empty release URL", "https://example.test/source", "npm_latest", "", 0), "empty release URL template"),
+        }
+
+        for field, (provider, message) in cases.items():
+            with self.subTest(field=field):
+                fetcher = Mock()
+                with patch("check_toolchain.REMOTE_TOOL_PROVIDER_REGISTRY", (provider,)):
+                    with self.assertRaisesRegex(ValueError, message):
+                        resolve_remote_upstream_versions(fetcher)
+                fetcher.fetch_json.assert_not_called()
