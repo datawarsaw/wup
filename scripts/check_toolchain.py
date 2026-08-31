@@ -280,17 +280,40 @@ REMOTE_RESOLVER_HANDLERS: Dict[str, ResolverHandler] = {
 }
 
 
+def validate_remote_provider_registry(
+    registry: Tuple[RemoteToolProvider, ...], handlers: Dict[str, ResolverHandler]
+) -> None:
+    """Reject malformed static remote-provider metadata before any fetches occur."""
+    names = set()
+    fetch_orders = set()
+
+    for provider in registry:
+        if not provider.name:
+            raise ValueError("remote provider registry contains an empty provider name")
+        if provider.name in names:
+            raise ValueError(f"remote provider registry contains duplicate provider name: {provider.name}")
+        if provider.fetch_order in fetch_orders:
+            raise ValueError(f"remote provider registry contains duplicate fetch order: {provider.fetch_order}")
+        if not provider.source:
+            raise ValueError(f"remote provider registry contains an empty source for: {provider.name}")
+        if not provider.release_url_template:
+            raise ValueError(f"remote provider registry contains an empty release URL template for: {provider.name}")
+        if provider.resolver not in handlers:
+            raise ValueError(f"remote provider registry contains unsupported resolver: {provider.resolver}")
+
+        names.add(provider.name)
+        fetch_orders.add(provider.fetch_order)
+
+
 def resolve_remote_upstream_versions(fetcher: NetworkFetcher) -> Tuple[Dict[str, Dict[str, str]], Dict[str, str]]:
     """Resolve upstream-only versions without inspecting a workstation executable or runtime."""
+    validate_remote_provider_registry(REMOTE_TOOL_PROVIDER_REGISTRY, REMOTE_RESOLVER_HANDLERS)
     versions: Dict[str, Dict[str, str]] = {}
     failures: Dict[str, str] = {}
 
     for provider in sorted(REMOTE_TOOL_PROVIDER_REGISTRY, key=lambda item: item.fetch_order):
         data = fetcher.fetch_json(provider.source)
-        handler = REMOTE_RESOLVER_HANDLERS.get(provider.resolver)
-        if handler is None:
-            failures[provider.name] = f"unsupported remote resolver: {provider.resolver}"
-            continue
+        handler = REMOTE_RESOLVER_HANDLERS[provider.resolver]
         resolved, failure = handler(provider, data)
         if resolved is not None:
             versions[provider.name] = resolved
