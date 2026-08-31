@@ -1476,13 +1476,13 @@ class ToolchainAuditor:
         desktop_res = self.check_codex_desktop()
         shims_res = self.check_opencodex_proxy_shims(ocx_diag)
         mcp_res = self.check_workstation_ops()
-        node_res = self.check_system_node()
-        npm_res = self.check_system_npm()
+        node_res = run_local_probe(self, "system_node")
+        npm_res = run_local_probe(self, "system_npm")
         bun_sys, bun_bundled = self.check_bun()
-        python_res = self.check_system_python()
-        git_res = self.check_git()
-        lms_res = self.check_lm_studio()
-        wrangler_res = self.check_wrangler()
+        python_res = run_local_probe(self, "system_python")
+        git_res = run_local_probe(self, "git")
+        lms_res = run_local_probe(self, "lm_studio")
+        wrangler_res = run_local_probe(self, "wrangler")
 
         tools.append(codex_res)
         tools.append(ocx_res)
@@ -1549,6 +1549,27 @@ class ToolchainAuditor:
             recommended_actions=recommendations,
             observer_path_status=observer_status,
         )
+
+
+# These probes are independent installed-version checks.  The more tightly
+# coupled Codex/OpenCodex and Bun checks retain their existing direct paths.
+LocalProbeHandler = Callable[[ToolchainAuditor], ToolCheckResult]
+LOCAL_PROBE_HANDLERS: Dict[str, LocalProbeHandler] = {
+    "system_node": ToolchainAuditor.check_system_node,
+    "system_npm": ToolchainAuditor.check_system_npm,
+    "system_python": ToolchainAuditor.check_system_python,
+    "git": ToolchainAuditor.check_git,
+    "lm_studio": ToolchainAuditor.check_lm_studio,
+    "wrangler": ToolchainAuditor.check_wrangler,
+}
+
+
+def run_local_probe(auditor: ToolchainAuditor, probe_key: str) -> ToolCheckResult:
+    """Run one supported local installed-version probe from the fixed registry."""
+    handler = LOCAL_PROBE_HANDLERS.get(probe_key)
+    if handler is None:
+        raise ValueError(f"unsupported local probe: {probe_key}")
+    return handler(auditor)
 
 
 # ---------------------------------------------------------------------------

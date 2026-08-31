@@ -24,6 +24,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from check_toolchain import (
+    LOCAL_PROBE_HANDLERS,
     NetworkFetcher,
     OpenCodexDiagnostics,
     SemVer,
@@ -34,6 +35,7 @@ from check_toolchain import (
     format_json_report,
     format_text_report,
     redact_secrets,
+    run_local_probe,
 )
 
 
@@ -146,6 +148,59 @@ class TestSemVerCompare(unittest.TestCase):
         self.assertIsNone(SemVer.parse(None))
         self.assertIsNone(SemVer.parse(""))
         self.assertIsNone(SemVer.parse("invalid_no_digits"))
+
+
+class TestLocalProbeRegistry(unittest.TestCase):
+    def test_static_registry_uses_existing_independent_probe_implementations(self):
+        self.assertEqual(
+            LOCAL_PROBE_HANDLERS,
+            {
+                "system_node": ToolchainAuditor.check_system_node,
+                "system_npm": ToolchainAuditor.check_system_npm,
+                "system_python": ToolchainAuditor.check_system_python,
+                "git": ToolchainAuditor.check_git,
+                "lm_studio": ToolchainAuditor.check_lm_studio,
+                "wrangler": ToolchainAuditor.check_wrangler,
+            },
+        )
+
+    def test_registry_dispatch_preserves_installed_version_probe(self):
+        auditor = ToolchainAuditor(
+            fetcher=NetworkFetcher(offline=True),
+            command_runner=make_mock_runner({"node -v": (0, "v24.20.0", "")}),
+        )
+
+        result = run_local_probe(auditor, "system_node")
+
+        self.assertEqual(result.name, "Node.js")
+        self.assertEqual(result.installed_version, "24.20.0")
+
+    def test_audit_uses_registry_for_migrated_installed_version_probe(self):
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=make_mock_runner())
+
+        def fixed_node_probe(_auditor: ToolchainAuditor) -> ToolCheckResult:
+            return ToolCheckResult(
+                name="Node.js",
+                installed_version="24.20.0",
+                install_method="registry test",
+                latest_version="24.20.0",
+                latest_source="registry test",
+                status="CURRENT",
+                health="HEALTHY",
+            )
+
+        with patch.dict(LOCAL_PROBE_HANDLERS, {"system_node": fixed_node_probe}):
+            report = auditor.audit_all()
+
+        node = next(result for result in report.tools if result.name == "Node.js")
+        self.assertEqual(node.installed_version, "24.20.0")
+        self.assertEqual(node.install_method, "registry test")
+
+    def test_unknown_registry_probe_is_rejected_deterministically(self):
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=make_mock_runner())
+
+        with self.assertRaisesRegex(ValueError, "^unsupported local probe: missing$"):
+            run_local_probe(auditor, "missing")
 
 
 class TestProductionClassification(unittest.TestCase):
