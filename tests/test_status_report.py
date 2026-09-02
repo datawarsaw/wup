@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import copy
 import html
+import io
+import json
 import socket
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from status_report import render_status_html
+from status_report import load_report_data, main, render_status_html, write_status_report
 from status_snapshot import build_status_snapshot
 
 
@@ -95,6 +98,195 @@ class StatusReportTest(unittest.TestCase):
         self.assertIn("2026-09-02T12:00:00Z", rendered)
         self.assertIn("Local observed</span><code>unknown", rendered)
         self.assertNotIn("None", rendered)
+
+    def test_cli_valid_audit_file_to_requested_output_path(self):
+        audit_data = {
+            "timestamp": "2026-09-02T14:30:00Z",
+            "tools": [
+                {
+                    "name": "Wrangler",
+                    "installed_version": "4.30.0",
+                    "latest_version": "4.32.0",
+                    "status": "WATCH",
+                    "health": "HEALTHY",
+                    "release_url": "https://example.test/wrangler",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            input_file = tmp / "audit.json"
+            input_file.write_text(json.dumps(audit_data), encoding="utf-8")
+            output_file = tmp / "nested" / "wup-status.html"
+
+            exit_code = main(["--input-report", str(input_file), "--output", str(output_file)])
+            self.assertEqual(0, exit_code)
+            self.assertTrue(output_file.exists())
+
+            content = output_file.read_text(encoding="utf-8")
+            self.assertIn("Wrangler", content)
+            self.assertIn("4.30.0", content)
+            self.assertIn("4.32.0", content)
+            self.assertIn("WATCH", content)
+            self.assertIn("HEALTHY", content)
+            self.assertIn("2026-09-02T14:30:00Z", content)
+            self.assertIn("https://example.test/wrangler", content)
+            self.assertIn("LOCAL", content)
+            self.assertIn("REMOTE", content)
+            self.assertIn("WUP · Local status", content)
+
+            # Exactly requested output path written, no unrelated/sibling files in parent
+            self.assertEqual(["wup-status.html"], [f.name for f in output_file.parent.iterdir()])
+
+    def test_cli_stdin_pipe_generates_report(self):
+        audit_data = {
+            "timestamp": "2026-09-02T15:00:00Z",
+            "tools": [
+                {
+                    "name": "Git",
+                    "installed_version": "2.51.0",
+                    "latest_version": "2.52.0",
+                    "status": "CURRENT",
+                    "health": "HEALTHY",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "stdin-report.html"
+            stdin_mock = io.StringIO(json.dumps(audit_data))
+            with patch.object(sys, "stdin", stdin_mock):
+                with patch.object(stdin_mock, "isatty", return_value=False):
+                    exit_code = main(["--output", str(output_file)])
+
+            self.assertEqual(0, exit_code)
+            self.assertTrue(output_file.exists())
+            content = output_file.read_text(encoding="utf-8")
+            self.assertIn("Git", content)
+            self.assertIn("2.51.0", content)
+            self.assertIn("CURRENT", content)
+
+    def test_cli_malformed_json_fails_closed_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            input_file = tmp / "bad.json"
+            input_file.write_text("{malformed: json...", encoding="utf-8")
+            output_file = tmp / "status.html"
+
+            stderr_buf = io.StringIO()
+            with patch("sys.stderr", stderr_buf):
+                exit_code = main(["--input-report", str(input_file), "--output", str(output_file)])
+
+            self.assertEqual(1, exit_code)
+            self.assertFalse(output_file.exists())
+            self.assertIn("REPORT_INPUT_ERROR", stderr_buf.getvalue())
+
+    def test_cli_structurally_invalid_report_fails_closed(self):
+        invalid_payloads = [
+            "[]",
+            '{"timestamp": "2026-09-02"}',
+            '{"tools": "not-a-list"}',
+            '{"tools": ["not-a-dict"]}',
+            "12345",
+        ]
+        for invalid in invalid_payloads:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
+                input_file = tmp / "invalid.json"
+                input_file.write_text(invalid, encoding="utf-8")
+                output_file = tmp / "status.html"
+
+                stderr_buf = io.StringIO()
+                with patch("sys.stderr", stderr_buf):
+                    exit_code = main(["--input-report", str(input_file), "--output", str(output_file)])
+
+                self.assertEqual(1, exit_code)
+                self.assertFalse(output_file.exists())
+                self.assertIn("REPORT_INPUT_ERROR", stderr_buf.getvalue())
+
+    def test_cli_missing_input_file_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "status.html"
+            missing_input = Path(tmpdir) / "does_not_exist.json"
+
+            stderr_buf = io.StringIO()
+            with patch("sys.stderr", stderr_buf):
+                exit_code = main(["--input-report", str(missing_input), "--output", str(output_file)])
+
+            self.assertEqual(1, exit_code)
+            self.assertFalse(output_file.exists())
+
+    def test_cli_tty_without_input_report_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "status.html"
+            with patch("sys.stdin.isatty", return_value=True):
+                stderr_buf = io.StringIO()
+                with patch("sys.stderr", stderr_buf):
+                    exit_code = main(["--output", str(output_file)])
+                self.assertEqual(1, exit_code)
+                self.assertFalse(output_file.exists())
+                self.assertIn("provide --input-report <path> or pipe JSON", stderr_buf.getvalue())
+
+    def test_cli_output_is_directory_fails_closed(self):
+        audit_data = {"tools": [{"name": "Tool", "status": "UNKNOWN"}]}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            input_file = tmp / "audit.json"
+            input_file.write_text(json.dumps(audit_data), encoding="utf-8")
+            dir_target = tmp / "existing_dir"
+            dir_target.mkdir()
+
+            stderr_buf = io.StringIO()
+            with patch("sys.stderr", stderr_buf):
+                exit_code = main(["--input-report", str(input_file), "--output", str(dir_target)])
+            self.assertEqual(1, exit_code)
+            self.assertIn("REPORT_WRITE_ERROR", stderr_buf.getvalue())
+
+    def test_cli_input_report_not_mutated_and_no_execution(self):
+        audit_data = {
+            "timestamp": "2026-09-02T12:00:00Z",
+            "tools": [{"name": "Codex CLI", "status": "CURRENT", "installed_version": "0.150.1"}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            input_file = tmp / "audit.json"
+            original_bytes = json.dumps(audit_data, indent=2).encode("utf-8")
+            input_file.write_bytes(original_bytes)
+            output_file = tmp / "output.html"
+
+            with (
+                patch("subprocess.run", side_effect=AssertionError("subprocess")) as mock_sub,
+                patch("subprocess.Popen", side_effect=AssertionError("popen")) as mock_popen,
+                patch("socket.socket", side_effect=AssertionError("socket")) as mock_socket,
+            ):
+                exit_code = main(["--input-report", str(input_file), "--output", str(output_file)])
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual(original_bytes, input_file.read_bytes())
+            mock_sub.assert_not_called()
+            mock_popen.assert_not_called()
+            mock_socket.assert_not_called()
+
+    def test_cli_subprocess_invocation_end_to_end(self):
+        audit_data = {
+            "timestamp": "2026-09-02T12:00:00Z",
+            "tools": [{"name": "OpenCodex", "status": "CURRENT", "installed_version": "2.35.0"}],
+        }
+        script_path = Path(__file__).resolve().parent.parent / "scripts" / "status_report.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            input_file = tmp / "audit.json"
+            input_file.write_text(json.dumps(audit_data), encoding="utf-8")
+            output_file = tmp / "out.html"
+
+            res = subprocess.run(
+                [sys.executable, str(script_path), "--input-report", str(input_file), "--output", str(output_file)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, res.returncode)
+            self.assertTrue(output_file.exists())
+            self.assertIn("OpenCodex", output_file.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

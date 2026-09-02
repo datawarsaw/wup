@@ -111,7 +111,14 @@ The PLAN also records a declarative update mechanism, automation mode, inert pla
 
 ## Local HTML status report
 
-Render a self-contained report from an existing MIC-141 snapshot in memory with `render_status_html(snapshot)`. The renderer is pure and does not read audit or history files, run probes, call the network, or write output. An explicit caller may write the returned HTML string to a chosen file; recent change detail remains available through the existing `change_history.py --view` commands.
+Generate a self-contained local HTML status report from an existing JSON audit report:
+
+```powershell
+python scripts/check_toolchain.py --json | python scripts/status_report.py --output wup-status.html
+python scripts/status_report.py --input-report <path-to-report.json> --output wup-status.html
+```
+
+`status_report.py` is strictly read-only with respect to audits: it never executes probes, calls the network, or starts a local server. It renders an HTML document only to the explicitly specified `--output` destination. The core `render_status_html(snapshot)` function remains pure and performs no filesystem writes. Recent change detail remains available through the existing `change_history.py --view` commands.
 
 ## Local change history
 

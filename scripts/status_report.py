@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import html
 from collections import Counter
-from typing import Any, Mapping, Optional
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 try:
-    from status_snapshot import StatusSnapshot, ToolStatusSnapshot
+    from status_snapshot import StatusSnapshot, ToolStatusSnapshot, build_status_snapshot
 except ImportError:  # pragma: no cover - supports package-style imports
-    from .status_snapshot import StatusSnapshot, ToolStatusSnapshot
+    from .status_snapshot import StatusSnapshot, ToolStatusSnapshot, build_status_snapshot
 
 
 _STATUS_CLASS = {
@@ -220,3 +224,80 @@ def render_status_html(snapshot: StatusSnapshot | Mapping[str, Any], history: An
   </main>
 </body>
 </html>"""
+
+
+def write_status_report(html_text: str, destination: Path | str) -> Path:
+    """Write an already-rendered report to an explicit destination path only."""
+    path = Path(destination)
+    if path.is_dir():
+        raise IsADirectoryError(f"destination must be a file path, not a directory: {path}")
+    if path.parent and not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(html_text, encoding="utf-8", newline="\n")
+    return path
+
+
+def load_report_data(input_path: Path | None = None) -> Mapping[str, Any]:
+    """Read and validate audit report JSON from a file or stdin."""
+    if input_path is not None:
+        if input_path.is_dir():
+            raise IsADirectoryError(f"input report path is a directory: {input_path}")
+        if not input_path.exists():
+            raise FileNotFoundError(f"input report file not found: {input_path}")
+        raw = input_path.read_text(encoding="utf-8")
+    else:
+        if sys.stdin.isatty():
+            raise ValueError("provide --input-report <path> or pipe JSON audit output to stdin")
+        raw = sys.stdin.read()
+
+    data = json.loads(raw)
+    if not isinstance(data, Mapping) or not isinstance(data.get("tools"), list):
+        raise ValueError("audit report must be a JSON object containing a 'tools' list")
+    for index, tool in enumerate(data["tools"]):
+        if not isinstance(tool, Mapping):
+            raise ValueError(f"tool at index {index} must be a JSON object")
+    return data
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Generate a self-contained local HTML status report from audit JSON.")
+    parser.add_argument("--input-report", type=Path, help="path to existing WUP JSON audit report; stdin when omitted")
+    parser.add_argument("--output", type=Path, required=True, help="path to destination HTML file")
+    args = parser.parse_args(argv)
+
+    try:
+        report_data = load_report_data(args.input_report)
+    except (FileNotFoundError, IsADirectoryError, ValueError, json.JSONDecodeError, OSError) as exc:
+        print(f"REPORT_INPUT_ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    if not isinstance(report_data, StatusSnapshot):
+        normalized = dict(report_data)
+        if "timestamp" not in normalized and "audit_report_timestamp" in normalized:
+            normalized["timestamp"] = normalized["audit_report_timestamp"]
+        tools_list = []
+        for t in normalized.get("tools", []):
+            if isinstance(t, Mapping) and "name" not in t and "tool_name" in t:
+                t_dict = dict(t)
+                t_dict["name"] = t_dict["tool_name"]
+                tools_list.append(t_dict)
+            else:
+                tools_list.append(t)
+        normalized["tools"] = tools_list
+        snapshot = build_status_snapshot(normalized)
+    else:
+        snapshot = report_data
+
+    html_content = render_status_html(snapshot)
+
+    try:
+        write_status_report(html_content, args.output)
+    except (IsADirectoryError, OSError) as exc:
+        print(f"REPORT_WRITE_ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
