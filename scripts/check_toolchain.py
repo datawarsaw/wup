@@ -1470,34 +1470,28 @@ class ToolchainAuditor:
         timestamp_str = now.isoformat()
 
         tools: List[ToolCheckResult] = []
+        # The normal orchestration path is driven by the authoritative catalog:
+        # each entry maps to a local probe, and catalog order is the canonical
+        # output order. Coupled probes (OpenCodex diagnostics, Bun's dual result)
+        # are handled by the dispatcher without creating a second tool list.
+        ocx_cache: Dict[str, Any] = {}
+        core_results: Dict[str, ToolCheckResult] = {}
+        for entry in MONITORED_TOOL_CATALOG:
+            if entry.local_probe is None:
+                continue
+            results = self._run_catalog_probe(entry.local_probe, ocx_cache)
+            tools.extend(results)
+            if results:
+                core_results[entry.name] = results[0]
 
-        ocx_res, ocx_diag = self.check_opencodex()
-        codex_res = self.check_codex_cli(ocx_diag=ocx_diag)
-        desktop_res = self.check_codex_desktop()
-        shims_res = self.check_opencodex_proxy_shims(ocx_diag)
-        mcp_res = self.check_workstation_ops()
-        node_res = run_local_probe(self, "system_node")
-        npm_res = run_local_probe(self, "system_npm")
-        bun_sys, bun_bundled = self.check_bun()
-        python_res = run_local_probe(self, "system_python")
-        git_res = run_local_probe(self, "git")
-        lms_res = run_local_probe(self, "lm_studio")
-        wrangler_res = run_local_probe(self, "wrangler")
-
-        tools.append(codex_res)
-        tools.append(ocx_res)
-        tools.append(desktop_res)
-        tools.append(shims_res)
-        tools.append(mcp_res)
-        tools.append(node_res)
-        tools.append(npm_res)
-        tools.append(bun_sys)
-        if bun_bundled:
-            tools.append(bun_bundled)
-        tools.append(python_res)
-        tools.append(git_res)
-        tools.append(lms_res)
-        tools.append(wrangler_res)
+        core_health = "HEALTHY"
+        codex_health = core_results["Codex CLI"].health if "Codex CLI" in core_results else "HEALTHY"
+        ocx_health = core_results["OpenCodex"].health if "OpenCodex" in core_results else "HEALTHY"
+        shims_health = core_results["OpenCodex Proxy & Shims"].health if "OpenCodex Proxy & Shims" in core_results else "HEALTHY"
+        if codex_health == "DEGRADED" or ocx_health == "DEGRADED" or shims_health == "DEGRADED":
+            core_health = "DEGRADED"
+        elif codex_health == "UNVERIFIED" or ocx_health == "UNVERIFIED":
+            core_health = "UNVERIFIED"
 
         enabled = {name.strip() for name in os.environ.get("WUP_ENABLED_TOOLS", "").split(",") if name.strip()}
         if enabled:
@@ -1505,12 +1499,6 @@ class ToolchainAuditor:
 
         for tool in tools:
             tool.release_url = self.release_url_for(tool)
-
-        core_health = "HEALTHY"
-        if codex_res.health == "DEGRADED" or ocx_res.health == "DEGRADED" or shims_res.health == "DEGRADED":
-            core_health = "DEGRADED"
-        elif codex_res.health == "UNVERIFIED" or ocx_res.health == "UNVERIFIED":
-            core_health = "UNVERIFIED"
 
         attention: List[str] = []
         for t in tools:
@@ -1549,6 +1537,40 @@ class ToolchainAuditor:
             recommended_actions=recommendations,
             observer_path_status=observer_status,
         )
+
+    def _run_catalog_probe(self, probe_key: str, ocx_cache: Dict[str, Any]) -> List[ToolCheckResult]:
+        """Run one catalog local probe, handling coupled/tuple probes.
+
+        Returns a list because Bun's probe can yield both a system and a bundled
+        result. OpenCodex diagnostics are computed at most once and reused by the
+        coupled Codex probes.
+        """
+        if probe_key == "check_opencodex":
+            if "res" not in ocx_cache:
+                ocx_res, ocx_diag = self.check_opencodex()
+                ocx_cache["res"], ocx_cache["diag"] = ocx_res, ocx_diag
+            return [ocx_cache["res"]]
+        if probe_key == "check_codex_cli":
+            return [self.check_codex_cli(ocx_diag=self._catalog_ocx_diag(ocx_cache))]
+        if probe_key == "check_codex_desktop":
+            return [self.check_codex_desktop()]
+        if probe_key == "check_opencodex_proxy_shims":
+            return [self.check_opencodex_proxy_shims(self._catalog_ocx_diag(ocx_cache))]
+        if probe_key == "check_workstation_ops":
+            return [self.check_workstation_ops()]
+        if probe_key == "check_bun":
+            bun_sys, bun_bundled = self.check_bun()
+            results = [bun_sys]
+            if bun_bundled:
+                results.append(bun_bundled)
+            return results
+        return [run_local_probe(self, probe_key)]
+
+    def _catalog_ocx_diag(self, ocx_cache: Dict[str, Any]) -> Any:
+        if "diag" not in ocx_cache:
+            ocx_res, ocx_diag = self.check_opencodex()
+            ocx_cache["res"], ocx_cache["diag"] = ocx_res, ocx_diag
+        return ocx_cache["diag"]
 
 
 # These probes are independent installed-version checks.  The more tightly

@@ -4,14 +4,19 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import check_toolchain
+from test_check_toolchain import make_mock_runner
 from check_toolchain import (
     LOCAL_PROBE_HANDLERS,
     MONITORED_TOOL_CATALOG,
     REMOTE_TOOL_PROVIDER_REGISTRY,
     MonitoredToolEntry,
+    NetworkFetcher,
     RemoteToolProvider,
     ToolchainAuditor,
     validate_catalog_consistency,
@@ -108,6 +113,63 @@ class TestCatalogProbeConsistency(unittest.TestCase):
             "LM Studio",
         }
         self.assertEqual(exempt_names, expected_exempt_names)
+
+
+class TestCatalogDrivenOrchestration(unittest.TestCase):
+    """The normal audit path must iterate from the authoritative catalog."""
+
+    def run_audit_names(self, catalog):
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=make_mock_runner())
+        with patch.object(check_toolchain, "MONITORED_TOOL_CATALOG", catalog):
+            report = auditor.audit_all()
+        return [tool.name for tool in report.tools]
+
+    def test_orchestration_names_derive_from_catalog(self):
+        # The audit path must invoke exactly the catalog's local probes, in
+        # catalog order. Spy on the dispatcher to prove the catalog is the sole
+        # orchestration authority rather than a second hard-coded list.
+        auditor = ToolchainAuditor(fetcher=NetworkFetcher(offline=True), command_runner=make_mock_runner())
+        calls: list[str] = []
+        original = ToolchainAuditor._run_catalog_probe
+
+        def spy(self_, probe_key, ocx_cache):
+            calls.append(probe_key)
+            return original(self_, probe_key, ocx_cache)
+
+        with patch.object(ToolchainAuditor, "_run_catalog_probe", spy):
+            auditor.audit_all()
+
+        expected_probes = [entry.local_probe for entry in MONITORED_TOOL_CATALOG if entry.local_probe]
+        self.assertEqual(calls, expected_probes)
+
+    def test_orchestration_order_follows_catalog(self):
+        reordered = tuple(
+            entry for entry in MONITORED_TOOL_CATALOG
+            if entry.name == "Git"
+        ) + tuple(
+            entry for entry in MONITORED_TOOL_CATALOG
+            if entry.name != "Git"
+        )
+        names = self.run_audit_names(reordered)
+        self.assertEqual(names[0], "Git")
+        self.assertEqual(names[1], "Codex CLI")
+
+    def test_synthetic_catalog_inclusion(self):
+        synthetic = (
+            MonitoredToolEntry("Codex CLI", local_probe="check_codex_cli", remote_provider="Codex CLI"),
+            MonitoredToolEntry("Node.js", local_probe="system_node", remote_provider="Node.js"),
+        )
+        names = self.run_audit_names(synthetic)
+        self.assertEqual(names, ["Codex CLI", "Node.js"])
+
+    def test_synthetic_catalog_exclusion(self):
+        synthetic = (
+            MonitoredToolEntry("Node.js", local_probe="system_node", remote_provider="Node.js"),
+        )
+        names = self.run_audit_names(synthetic)
+        self.assertEqual(names, ["Node.js"])
+        self.assertNotIn("Git", names)
+        self.assertNotIn("Bun", names)
 
 
 if __name__ == "__main__":
