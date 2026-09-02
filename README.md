@@ -109,6 +109,10 @@ The PLAN also records a declarative update mechanism, automation mode, inert pla
 
 `status_snapshot.py` is a pure projection for a future local static report. It consumes an already-produced audit report and exposes only a tool's name, installed/latest versions, status, health, existing release/docs URL, and fixed provenance (`LOCAL` for installed version, `REMOTE` for latest version). It does not run probes, use the network, read or write state, or retain diagnostics, environment data, credentials, or raw provider payloads. WUP currently has only an audit-report timestamp; the snapshot preserves that explicitly as `audit_report_timestamp` and reports independent per-tool local and remote observation timestamps as JSON `null` / text `unknown` rather than fabricating freshness.
 
+## Local HTML status report
+
+Render a self-contained report from an existing MIC-141 snapshot in memory with `render_status_html(snapshot)`. The renderer is pure and does not read audit or history files, run probes, call the network, or write output. An explicit caller may write the returned HTML string to a chosen file; recent change detail remains available through the existing `change_history.py --view` commands.
+
 ## Local change history
 
 Record an existing JSON audit report in a local, append-only JSONL history:
