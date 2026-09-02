@@ -79,6 +79,7 @@ python scripts/doctor.py --json
 ```
 
 `doctor.py` is strictly non-mutating: it never creates, edits, or deletes configuration, state files, or scheduled tasks.
+Its default output is human-readable; use `--json` for deterministic local automation output. Exit code `0` means healthy or optional-only degradation, `1` means an unhealthy required check, and `2` means no report could be produced. Credentials and configuration values are never printed.
 
 ## Update Plan
 

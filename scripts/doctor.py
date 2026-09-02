@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 import os
 import shutil
@@ -28,10 +27,7 @@ class DoctorCheck:
     details: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        data = dataclasses.asdict(self)
-        if self.details is None:
-            data.pop("details", None)
-        return data
+        return {"name": self.name, "status": self.status, "message": self.message}
 
 
 @dataclass
@@ -98,8 +94,8 @@ def check_configuration(config_path: Path) -> DoctorCheck:
         return DoctorCheck(
             name="configuration",
             status="UNHEALTHY",
-            message=f"invalid configuration in {config_path.name}: {exc}",
-            details={"config_path": str(config_path), "error": str(exc)},
+            message=f"invalid configuration in {config_path.name}",
+            details={"config_path": str(config_path), "error": "parse_failure"},
         )
 
 
@@ -156,8 +152,8 @@ def check_state(state_path: Path) -> DoctorCheck:
         return DoctorCheck(
             name="state",
             status="UNHEALTHY",
-            message=f"unreadable or malformed state file {state_path.name}: {exc}",
-            details={"state_path": str(state_path), "error": str(exc)},
+            message=f"unreadable or malformed state file {state_path.name}",
+            details={"state_path": str(state_path), "error": "parse_failure"},
         )
 
 
@@ -204,8 +200,8 @@ def check_scheduler() -> DoctorCheck:
         return DoctorCheck(
             name="scheduler",
             status="DEGRADED",
-            message=f"scheduler inspection unavailable: {exc}",
-            details={"error": str(exc)},
+            message="scheduler inspection unavailable",
+            details={"error": "inspection_failure"},
         )
 
 
@@ -260,28 +256,34 @@ def format_text_report(report: DoctorReport) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
+def doctor_exit_code(report: DoctorReport) -> int:
+    return 1 if report.status == "UNHEALTHY" else 0
+
+
+def format_json_report(report: DoctorReport) -> str:
+    return json.dumps(report.to_dict(), sort_keys=True)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="path to configuration file")
     parser.add_argument("--repo-root", type=Path, help="path to repository root")
     parser.add_argument("--state-path", type=Path, help="path to state file")
     parser.add_argument("--skip-scheduler", action="store_true", help="skip Windows Task Scheduler inspection")
     parser.add_argument("--json", action="store_true", help="output report as JSON")
-    args = parser.parse_args()
-
-    report = diagnose(
-        repo_root=args.repo_root,
-        config_path=args.config,
-        state_path=args.state_path,
-        check_scheduler_task=not args.skip_scheduler,
-    )
-
-    if args.json:
-        print(json.dumps(report.to_dict(), indent=2))
-    else:
-        print(format_text_report(report))
-
-    return 0 if report.status in ("HEALTHY", "DEGRADED") else 1
+    args = parser.parse_args(argv)
+    try:
+        report = diagnose(
+            repo_root=args.repo_root,
+            config_path=args.config,
+            state_path=args.state_path,
+            check_scheduler_task=not args.skip_scheduler,
+        )
+        print(format_json_report(report) if args.json else format_text_report(report))
+        return doctor_exit_code(report)
+    except Exception:
+        print("WUP doctor could not complete.", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
