@@ -1572,6 +1572,84 @@ def run_local_probe(auditor: ToolchainAuditor, probe_key: str) -> ToolCheckResul
     return handler(auditor)
 
 
+@dataclass(frozen=True)
+class MonitoredToolEntry:
+    name: str
+    local_probe: Optional[str] = None
+    remote_provider: Optional[str] = None
+    local_exempt_reason: Optional[str] = None
+    remote_exempt_reason: Optional[str] = None
+
+
+MONITORED_TOOL_CATALOG: Tuple[MonitoredToolEntry, ...] = (
+    MonitoredToolEntry("Codex CLI", local_probe="check_codex_cli", remote_provider="Codex CLI"),
+    MonitoredToolEntry("OpenCodex", local_probe="check_opencodex", remote_provider="OpenCodex"),
+    MonitoredToolEntry("Codex Desktop", local_probe="check_codex_desktop", remote_exempt_reason="no_public_registry"),
+    MonitoredToolEntry("OpenCodex Proxy & Shims", local_probe="check_opencodex_proxy_shims", remote_exempt_reason="local_daemon_and_shims"),
+    MonitoredToolEntry("Workstation Ops / MCP", local_probe="check_workstation_ops", remote_exempt_reason="local_repository_only"),
+    MonitoredToolEntry("Node.js", local_probe="system_node", remote_provider="Node.js"),
+    MonitoredToolEntry("npm", local_probe="system_npm", remote_provider="npm"),
+    MonitoredToolEntry("Bun", local_probe="check_bun", remote_provider="Bun"),
+    MonitoredToolEntry("Python", local_probe="system_python", remote_exempt_reason="docs_cycle_only"),
+    MonitoredToolEntry("Git", local_probe="git", remote_provider="Git"),
+    MonitoredToolEntry("LM Studio", local_probe="lm_studio", remote_exempt_reason="vendor_cli_only"),
+    MonitoredToolEntry("Wrangler", local_probe="wrangler", remote_provider="Wrangler"),
+)
+
+
+def validate_catalog_consistency(
+    catalog: Tuple[MonitoredToolEntry, ...] = MONITORED_TOOL_CATALOG,
+    remote_registry: Tuple[RemoteToolProvider, ...] = REMOTE_TOOL_PROVIDER_REGISTRY,
+    local_handlers: Dict[str, LocalProbeHandler] = LOCAL_PROBE_HANDLERS,
+    auditor_cls: Any = ToolchainAuditor,
+) -> None:
+    """Verify that monitored tool catalog, remote providers, and local probes do not drift."""
+    seen_names = set()
+    catalog_remote_providers = set()
+    catalog_local_probes = set()
+
+    for entry in catalog:
+        if not entry.name or not entry.name.strip():
+            raise ValueError("monitored tool catalog contains an empty tool name")
+        if entry.name in seen_names:
+            raise ValueError(f"monitored tool catalog contains duplicate tool name: {entry.name}")
+        seen_names.add(entry.name)
+
+        if entry.local_probe is not None:
+            if not entry.local_probe.strip():
+                raise ValueError(f"catalog entry '{entry.name}' has an empty local probe reference")
+            has_handler = entry.local_probe in local_handlers
+            has_auditor_method = hasattr(auditor_cls, entry.local_probe) and callable(getattr(auditor_cls, entry.local_probe))
+            if not (has_handler or has_auditor_method):
+                raise ValueError(f"catalog entry '{entry.name}' references unknown local probe: {entry.local_probe}")
+            catalog_local_probes.add(entry.local_probe)
+        else:
+            if not entry.local_exempt_reason or not entry.local_exempt_reason.strip():
+                raise ValueError(f"required monitored tool '{entry.name}' is missing local probe coverage without an explicit exemption")
+
+        remote_provider_names = {provider.name for provider in remote_registry}
+        if entry.remote_provider is not None:
+            if not entry.remote_provider.strip():
+                raise ValueError(f"catalog entry '{entry.name}' has an empty remote provider reference")
+            if entry.remote_provider not in remote_provider_names:
+                raise ValueError(f"catalog entry '{entry.name}' references unknown remote provider: {entry.remote_provider}")
+            catalog_remote_providers.add(entry.remote_provider)
+        else:
+            if not entry.remote_exempt_reason or not entry.remote_exempt_reason.strip():
+                raise ValueError(f"required monitored tool '{entry.name}' is missing remote provider coverage without an explicit exemption")
+
+    for provider in remote_registry:
+        if provider.name not in catalog_remote_providers:
+            raise ValueError(f"remote provider registry contains provider '{provider.name}' not associated with any catalog entry")
+
+    for probe_key in local_handlers:
+        if probe_key not in catalog_local_probes:
+            raise ValueError(f"local probe registry contains probe '{probe_key}' not associated with any catalog entry")
+
+
+validate_catalog_consistency()
+
+
 # ---------------------------------------------------------------------------
 # Output Formatters
 # ---------------------------------------------------------------------------
