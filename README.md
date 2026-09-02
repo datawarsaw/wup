@@ -101,7 +101,9 @@ python scripts/check_toolchain.py --json | python scripts/update_plan.py
 python scripts/update_plan.py --input-report <path-to-report.json> --json
 ```
 
-`update_plan.py` is strictly descriptive and read-only: it describes known update state using existing WUP findings, generates no shell or package-manager commands, and performs no installation or mutation.
+`update_plan.py` is strictly descriptive and read-only: it describes known update state using existing WUP findings, performs no installation or mutation, and never executes planned commands.
+
+The PLAN also records a declarative update mechanism, automation mode, inert planned instruction, and post-update verification guidance where the repository has an unambiguous mechanism. `AUTOMATABLE` is limited to supported npm-managed tools; Codex CLI falls back to `MANUAL` or `UNKNOWN` for Windows App/MSIX, binary, metadata-only, or otherwise ambiguous installations. Unsupported tools remain `UNKNOWN` without guessed commands. These fields are data only; PLAN never executes them and provides no APPLY operation.
 
 ## Local change history
 
