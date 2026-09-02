@@ -114,6 +114,16 @@ python scripts/change_history.py --input-report <path-to-report.json>
 
 By default the file is `%LOCALAPPDATA%\WUP\change-history.jsonl` (or under the configured `local.state_dir`). The first observation is an explicit `baseline` record, not a change from nothing. Later runs append a `change` record only when a tool's installed version, latest version, status, or health changes; identical observations add no lines. Records contain only those fields, the tool name, changed field names, and an ISO-8601 UTC timestamp. This history is local only: WUP sends it nowhere and it does not affect notifications, scheduler behavior, or remote state.
 
+View recent local history without reading raw JSONL or changing it:
+
+```powershell
+python scripts/change_history.py --view
+python scripts/change_history.py --view --limit 10
+python scripts/change_history.py --view --json
+```
+
+The viewer uses the same default path and never creates, repairs, rewrites, or appends history. Baseline output displays the persisted whitelisted tool snapshot; change output displays stored before/after values for changed fields. A missing or empty file reports no history and exits `0`; malformed history fails closed with exit `1` and remains unchanged. `--limit N` selects the most recent N records but displays them in chronological order. Invalid CLI usage exits `2`.
+
 ## Configuration
 
 Copy [`wup.example.toml`](wup.example.toml) to `wup.toml`. Configuration covers:
