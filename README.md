@@ -69,6 +69,17 @@ Python 3.10+ is required. Node.js is needed only for Node-based checks or an ext
 
 `--dry-run` renders notifications without sending them or advancing deduplication state. Use it before enabling any scheduler or external notification channel.
 
+## Diagnostics (Doctor)
+
+Run the strictly read-only diagnostics to verify repository integrity, configuration validity, runtime prerequisites, and state readability without making any changes:
+
+```powershell
+python scripts/doctor.py
+python scripts/doctor.py --json
+```
+
+`doctor.py` is strictly non-mutating: it never creates, edits, or deletes configuration, state files, or scheduled tasks.
+
 ## Configuration
 
 Copy [`wup.example.toml`](wup.example.toml) to `wup.toml`. Configuration covers:
