@@ -24,5 +24,4 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -p "test_*.py"
       - name: Compile Python entrypoints
-        run: |
-          python -m py_compile scripts/check_toolchain.py scripts/remote_version_sentinel.py scripts/run_notifier.py scripts/telegram_notify.py scripts/workstation_snapshot.py scripts/wup_config.py
+        run: python -m compileall -q scripts
