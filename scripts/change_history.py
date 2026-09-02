@@ -157,11 +157,138 @@ def _load_report(path: Path | None) -> Mapping[str, Any]:
     return report
 
 
+def _validated_snapshot(value: Any, record_index: int, field: str) -> list[dict[str, Any]]:
+    if not isinstance(value, Mapping) or set(value) != {"tools"} or not isinstance(value.get("tools"), list):
+        raise HistoryError(f"history record {record_index} has no valid {field} snapshot")
+
+    for tool in value["tools"]:
+        if not isinstance(tool, Mapping) or set(tool) != set(_PERSISTED_FIELDS):
+            raise HistoryError(f"history record {record_index} has an invalid {field} tool snapshot")
+
+    return normalize_observations(value["tools"])
+
+
+def _safe_history_record(record: Mapping[str, Any], record_index: int) -> dict[str, Any]:
+    record_type = record.get("type")
+    timestamp = record.get("timestamp")
+
+    if not isinstance(timestamp, str) or record_type not in {"baseline", "change"}:
+        raise HistoryError(f"history record {record_index} has an invalid type or timestamp")
+
+    if record_type == "baseline":
+        if set(record) != {"type", "timestamp", "current"}:
+            raise HistoryError(f"history record {record_index} has unexpected baseline fields")
+        current = _validated_snapshot(record["current"], record_index, "current")
+        return {"type": "baseline", "timestamp": timestamp, "tools": current}
+
+    if set(record) != {"type", "timestamp", "previous", "current", "changed_fields"}:
+        raise HistoryError(f"history record {record_index} has unexpected change fields")
+    previous = _validated_snapshot(record["previous"], record_index, "previous")
+    current = _validated_snapshot(record["current"], record_index, "current")
+    previous_by_name = {tool["name"]: tool for tool in previous}
+    current_by_name = {tool["name"]: tool for tool in current}
+    changes = record.get("changed_fields")
+    if not isinstance(changes, list):
+        raise HistoryError(f"history record {record_index} has invalid changed fields")
+
+    safe_changes: list[dict[str, Any]] = []
+    for change in changes:
+        if not isinstance(change, Mapping) or set(change) != {"tool", "fields"}:
+            raise HistoryError(f"history record {record_index} has invalid changed fields")
+        tool = change.get("tool")
+        fields = change.get("fields")
+        if not isinstance(tool, str) or not tool or not isinstance(fields, list) or not fields or any(field not in FINGERPRINT_FIELDS for field in fields):
+            raise HistoryError(f"history record {record_index} has invalid changed fields")
+        if tool not in previous_by_name or tool not in current_by_name:
+            raise HistoryError(f"history record {record_index} references an unknown changed tool")
+        safe_changes.append(
+            {
+                "tool": tool,
+                "fields": {
+                    field: {"previous": previous_by_name[tool].get(field), "current": current_by_name[tool].get(field)}
+                    for field in fields
+                },
+            }
+        )
+
+    return {"type": "change", "timestamp": timestamp, "changes": safe_changes}
+
+
+def view_history(history_path: Path | str | None = None, *, limit: int | None = None) -> list[dict[str, Any]]:
+    """Read and safely summarize existing history without creating or changing it."""
+    if limit is not None and limit <= 0:
+        raise ValueError("limit must be a positive integer")
+
+    path = Path(history_path) if history_path is not None else default_history_path()
+    records = _read_history(path)
+    safe_records = [_safe_history_record(record, index) for index, record in enumerate(records, start=1)]
+    return safe_records[-limit:] if limit is not None else safe_records
+
+
+def format_history_text(records: Sequence[Mapping[str, Any]]) -> str:
+    if not records:
+        return "WUP History\nNo history available."
+
+    lines = ["WUP History"]
+    for record in records:
+        if record["type"] == "baseline":
+            lines.append(f"BASELINE {record['timestamp']}")
+            for tool in record["tools"]:
+                lines.append(f"  {tool['name']}")
+                for field in _PERSISTED_FIELDS[1:]:
+                    lines.append(f"    {field}: {_text_history_value(tool.get(field))}")
+        else:
+            lines.append(f"CHANGE {record['timestamp']}")
+            for change in record["changes"]:
+                lines.append(f"  {change['tool']}")
+                for field, values in change["fields"].items():
+                    previous = _text_history_value(values.get("previous"))
+                    current = _text_history_value(values.get("current"))
+                    lines.append(f"    {field}: {previous} -> {current}")
+    return "\n".join(lines)
+
+
+def _text_history_value(value: Any) -> str:
+    return "unknown" if value is None else str(value)
+
+
+def format_history_json(records: Sequence[Mapping[str, Any]]) -> str:
+    return json.dumps({"count": len(records), "records": list(records)}, sort_keys=True)
+
+
+def _positive_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if limit <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return limit
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Record meaningful WUP audit changes in local JSONL history.")
     parser.add_argument("--input-report", type=Path, help="existing WUP JSON audit report; stdin when omitted")
     parser.add_argument("--history-path", type=Path, help="local JSONL path; defaults to WUP local state directory")
+    parser.add_argument("--view", action="store_true", help="read and summarize local history without changing it")
+    parser.add_argument("--json", action="store_true", help="render --view output as deterministic JSON")
+    parser.add_argument("--limit", type=_positive_limit, help="with --view, show the most recent N records in chronological order")
     args = parser.parse_args(argv)
+
+    if args.view:
+        if args.input_report is not None:
+            parser.error("--input-report cannot be used with --view")
+        try:
+            records = view_history(args.history_path, limit=args.limit)
+        except (HistoryError, ValueError):
+            print("HISTORY_VIEW_ERROR: history could not be read safely.", file=sys.stderr)
+            return 1
+        print(format_history_json(records) if args.json else format_history_text(records))
+        return 0
+
+    if args.json or args.limit is not None:
+        parser.error("--json and --limit require --view")
+
     try:
         outcome = record_observations(_load_report(args.input_report)["tools"], args.history_path)
     except HistoryError as exc:
