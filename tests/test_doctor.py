@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,7 +22,11 @@ from doctor import (
     check_runtime,
     check_scheduler,
     check_state,
+    doctor_exit_code,
     diagnose,
+    format_json_report,
+    format_text_report,
+    main,
 )
 
 
@@ -168,6 +174,50 @@ class TestDoctor(unittest.TestCase):
         self.assertEqual(d["status"], "HEALTHY")
         self.assertIsInstance(d["checks"], list)
         self.assertEqual(len(d["checks"]), 4)
+
+
+class TestDoctorCliContract(unittest.TestCase):
+    def test_json_whitelists_fields_and_preserves_check_order(self):
+        report = DoctorReport("HEALTHY", [DoctorCheck("one", "HEALTHY", "ok", {"token": "secret"}), DoctorCheck("two", "DEGRADED", "optional")])
+        rendered = format_json_report(report)
+        self.assertEqual(rendered, format_json_report(report))
+        self.assertEqual(["one", "two"], [item["name"] for item in json.loads(rendered)["checks"]])
+        self.assertNotIn("secret", rendered)
+        self.assertNotIn("details", rendered)
+
+    def test_exit_codes_follow_existing_required_readiness(self):
+        self.assertEqual(0, doctor_exit_code(DoctorReport("HEALTHY", [])))
+        self.assertEqual(0, doctor_exit_code(DoctorReport("DEGRADED", [DoctorCheck("scheduler", "DEGRADED", "optional")])))
+        self.assertEqual(1, doctor_exit_code(DoctorReport("UNHEALTHY", [])))
+
+    def test_main_evaluates_once_and_keeps_unhealthy_diagnostics(self):
+        report = DoctorReport("UNHEALTHY", [DoctorCheck("state", "UNHEALTHY", "malformed")])
+        out, err = io.StringIO(), io.StringIO()
+        with patch("doctor.diagnose", return_value=report) as mocked, redirect_stdout(out), redirect_stderr(err):
+            self.assertEqual(1, main(["--json", "--skip-scheduler"]))
+        self.assertEqual(1, mocked.call_count)
+        self.assertEqual("malformed", json.loads(out.getvalue())["checks"][0]["message"])
+        self.assertEqual("", err.getvalue())
+
+    def test_default_text_and_internal_failure_exit_two(self):
+        report = DoctorReport("HEALTHY", [DoctorCheck("repository", "HEALTHY", "ok")])
+        out = io.StringIO()
+        with patch("doctor.diagnose", return_value=report), redirect_stdout(out):
+            self.assertEqual(0, main(["--skip-scheduler"]))
+        self.assertEqual(format_text_report(report) + "\n", out.getvalue())
+        err = io.StringIO()
+        with patch("doctor.diagnose", side_effect=RuntimeError("SECRET_TOKEN_ABC123")), redirect_stderr(err):
+            self.assertEqual(2, main(["--json", "--skip-scheduler"]))
+        self.assertEqual("WUP doctor could not complete.\n", err.getvalue())
+        self.assertNotIn("SECRET_TOKEN_ABC123", err.getvalue())
+
+    def test_parse_failure_sentinels_are_not_rendered(self):
+        with patch("doctor.wup_config.load_config", side_effect=ValueError("SECRET_TOKEN_ABC123")):
+            check = check_configuration(Path("bad.toml"))
+        report = DoctorReport("UNHEALTHY", [check])
+        self.assertEqual("configuration", check.name)
+        self.assertNotIn("SECRET_TOKEN_ABC123", format_text_report(report))
+        self.assertNotIn("SECRET_TOKEN_ABC123", format_json_report(report))
 
 
 if __name__ == "__main__":
