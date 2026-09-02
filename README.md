@@ -105,6 +105,10 @@ python scripts/update_plan.py --input-report <path-to-report.json> --json
 
 The PLAN also records a declarative update mechanism, automation mode, inert planned instruction, and post-update verification guidance where the repository has an unambiguous mechanism. `AUTOMATABLE` is limited to supported npm-managed tools; Codex CLI falls back to `MANUAL` or `UNKNOWN` for Windows App/MSIX, binary, metadata-only, or otherwise ambiguous installations. Unsupported tools remain `UNKNOWN` without guessed commands. These fields are data only; PLAN never executes them and provides no APPLY operation.
 
+## Status snapshot
+
+`status_snapshot.py` is a pure projection for a future local static report. It consumes an already-produced audit report and exposes only a tool's name, installed/latest versions, status, health, existing release/docs URL, and fixed provenance (`LOCAL` for installed version, `REMOTE` for latest version). It does not run probes, use the network, read or write state, or retain diagnostics, environment data, credentials, or raw provider payloads. WUP currently has only an audit-report timestamp; the snapshot preserves that explicitly as `audit_report_timestamp` and reports independent per-tool local and remote observation timestamps as JSON `null` / text `unknown` rather than fabricating freshness.
+
 ## Local change history
 
 Record an existing JSON audit report in a local, append-only JSONL history:
