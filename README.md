@@ -80,6 +80,17 @@ python scripts/doctor.py --json
 
 `doctor.py` is strictly non-mutating: it never creates, edits, or deletes configuration, state files, or scheduled tasks.
 
+## Update Plan
+
+Generate a deterministic, descriptive update plan from audit results without executing any updates:
+
+```powershell
+python scripts/check_toolchain.py --json | python scripts/update_plan.py
+python scripts/update_plan.py --input-report <path-to-report.json> --json
+```
+
+`update_plan.py` is strictly descriptive and read-only: it describes known update state using existing WUP findings, generates no shell or package-manager commands, and performs no installation or mutation.
+
 ## Configuration
 
 Copy [`wup.example.toml`](wup.example.toml) to `wup.toml`. Configuration covers:
