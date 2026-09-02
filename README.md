@@ -91,6 +91,17 @@ python scripts/update_plan.py --input-report <path-to-report.json> --json
 
 `update_plan.py` is strictly descriptive and read-only: it describes known update state using existing WUP findings, generates no shell or package-manager commands, and performs no installation or mutation.
 
+## Local change history
+
+Record an existing JSON audit report in a local, append-only JSONL history:
+
+```powershell
+python scripts/check_toolchain.py --json | python scripts/change_history.py
+python scripts/change_history.py --input-report <path-to-report.json>
+```
+
+By default the file is `%LOCALAPPDATA%\WUP\change-history.jsonl` (or under the configured `local.state_dir`). The first observation is an explicit `baseline` record, not a change from nothing. Later runs append a `change` record only when a tool's installed version, latest version, status, or health changes; identical observations add no lines. Records contain only those fields, the tool name, changed field names, and an ISO-8601 UTC timestamp. This history is local only: WUP sends it nowhere and it does not affect notifications, scheduler behavior, or remote state.
+
 ## Configuration
 
 Copy [`wup.example.toml`](wup.example.toml) to `wup.toml`. Configuration covers:
