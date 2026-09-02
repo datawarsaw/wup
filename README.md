@@ -81,6 +81,17 @@ python scripts/doctor.py --json
 `doctor.py` is strictly non-mutating: it never creates, edits, or deletes configuration, state files, or scheduled tasks.
 Its default output is human-readable; use `--json` for deterministic local automation output. Exit code `0` means healthy or optional-only degradation, `1` means an unhealthy required check, and `2` means no report could be produced. Credentials and configuration values are never printed.
 
+## Setup preflight
+
+Check whether this machine is ready to activate WUP without installing, repairing, configuring, or activating anything:
+
+```powershell
+python scripts/preflight.py
+python scripts/preflight.py --json
+```
+
+The preflight is a read-only projection of the existing doctor checks: required unhealthy checks are blockers, while optional degraded checks remain warnings. Exit code `0` means `READY`, `1` means `NOT_READY`, and `2` means a report could not be produced. JSON output includes only check names and safe messages; it never prints credentials, configuration values, or diagnostic details.
+
 ## Update Plan
 
 Generate a deterministic, descriptive update plan from audit results without executing any updates:
