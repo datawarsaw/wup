@@ -11,6 +11,28 @@ from pathlib import Path
 from typing import Any, List, Mapping, Optional, Sequence
 
 
+UPDATE_MECHANISMS: dict[str, dict[str, str]] = {
+    "OpenCodex": {
+        "mechanism": "npm",
+        "automation_mode": "AUTOMATABLE",
+        "update_instruction": "npm install -g @bitkyc08/opencodex",
+        "verification_instruction": "ocx --version; rerun WUP audit",
+    },
+    "Codex CLI": {
+        "mechanism": "npm",
+        "automation_mode": "AUTOMATABLE",
+        "update_instruction": "npm install -g @openai/codex",
+        "verification_instruction": "codex --version; rerun WUP audit",
+    },
+    "Wrangler": {
+        "mechanism": "npm",
+        "automation_mode": "AUTOMATABLE",
+        "update_instruction": "npm install -g wrangler",
+        "verification_instruction": "wrangler --version; rerun WUP audit",
+    },
+}
+
+
 @dataclass(frozen=True)
 class UpdatePlanEntry:
     tool: str
@@ -20,6 +42,10 @@ class UpdatePlanEntry:
     status: str
     reason: Optional[str] = None
     release_or_docs_url: Optional[str] = None
+    mechanism: str = "UNKNOWN"
+    automation_mode: str = "UNKNOWN"
+    update_instruction: Optional[str] = None
+    verification_instruction: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         data = dataclasses.asdict(self)
@@ -54,13 +80,14 @@ class UpdatePlan:
         }
 
 
-def _extract_tool_data(tool: Any) -> tuple[str, Optional[str], Optional[str], str, Optional[str], Optional[str]]:
+def _extract_tool_data(tool: Any) -> tuple[str, Optional[str], Optional[str], str, Optional[str], Optional[str], str]:
     if isinstance(tool, Mapping):
         name = str(tool.get("name", ""))
         installed = tool.get("installed_version")
         latest = tool.get("latest_version")
         status = str(tool.get("status", "UNKNOWN"))
         release_url = tool.get("release_url")
+        install_method = str(tool.get("install_method", "unknown"))
 
         rec = tool.get("update_recommendation")
         if isinstance(rec, Mapping) and rec.get("why"):
@@ -73,13 +100,14 @@ def _extract_tool_data(tool: Any) -> tuple[str, Optional[str], Optional[str], st
         else:
             reason = None
 
-        return name, installed, latest, status, reason, release_url
+        return name, installed, latest, status, reason, release_url, install_method
 
     name = getattr(tool, "name", "")
     installed = getattr(tool, "installed_version", None)
     latest = getattr(tool, "latest_version", None)
     status = getattr(tool, "status", "UNKNOWN")
     release_url = getattr(tool, "release_url", None)
+    install_method = str(getattr(tool, "install_method", "unknown"))
 
     rec = getattr(tool, "update_recommendation", None)
     why = getattr(rec, "why", None) if rec else None
@@ -94,7 +122,37 @@ def _extract_tool_data(tool: Any) -> tuple[str, Optional[str], Optional[str], st
     else:
         reason = None
 
-    return name, installed, latest, status, reason, release_url
+    return name, installed, latest, status, reason, release_url, install_method
+
+
+def _resolve_mechanism(name: str, install_method: str) -> dict[str, str]:
+    """Return trusted descriptive metadata without using audit values in commands."""
+    if name == "Codex CLI":
+        method = install_method.lower()
+        if method.startswith("npm"):
+            return UPDATE_MECHANISMS[name]
+        if "windows app" in method or "msix" in method:
+            return {
+                "mechanism": "windows-app",
+                "automation_mode": "MANUAL",
+                "verification_instruction": "Update through the Windows App/MSIX distribution, then rerun WUP audit",
+            }
+        if method.startswith("binary"):
+            return {
+                "mechanism": "binary",
+                "automation_mode": "MANUAL",
+                "verification_instruction": "Update the managed binary through its distribution channel, then rerun WUP audit",
+            }
+        return {
+            "mechanism": "UNKNOWN",
+            "automation_mode": "UNKNOWN",
+            "verification_instruction": "Rerun WUP audit",
+        }
+    return UPDATE_MECHANISMS.get(name, {
+        "mechanism": "UNKNOWN",
+        "automation_mode": "UNKNOWN",
+        "verification_instruction": "Rerun WUP audit",
+    })
 
 
 def build_update_plan(
@@ -113,8 +171,10 @@ def build_update_plan(
 
     entries: List[UpdatePlanEntry] = []
     for raw in raw_tools:
-        name, installed, latest, status, reason, release_url = _extract_tool_data(raw)
+        name, installed, latest, status, reason, release_url, install_method = _extract_tool_data(raw)
         update_needed = status in ("UPDATE", "URGENT")
+        mechanism = _resolve_mechanism(name, install_method)
+        update_instruction = mechanism.get("update_instruction") if update_needed else None
         entries.append(
             UpdatePlanEntry(
                 tool=name,
@@ -124,6 +184,10 @@ def build_update_plan(
                 status=status,
                 reason=reason,
                 release_or_docs_url=release_url,
+                mechanism=mechanism["mechanism"],
+                automation_mode=mechanism["automation_mode"],
+                update_instruction=update_instruction,
+                verification_instruction=mechanism["verification_instruction"],
             )
         )
 
@@ -160,6 +224,10 @@ def format_text_plan(plan: UpdatePlan) -> str:
             lines.append(f"             Reason: {entry.reason}")
         if entry.release_or_docs_url:
             lines.append(f"             Info: {entry.release_or_docs_url}")
+        lines.append(f"             Mechanism: {entry.mechanism} ({entry.automation_mode})")
+        if entry.update_instruction:
+            lines.append(f"             Planned update: {entry.update_instruction}")
+        lines.append(f"             Verify: {entry.verification_instruction or 'Rerun WUP audit'}")
 
     return "\n".join(lines)
 
