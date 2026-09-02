@@ -105,6 +105,27 @@ python scripts/update_plan.py --input-report <path-to-report.json> --json
 
 The PLAN also records a declarative update mechanism, automation mode, inert planned instruction, and post-update verification guidance where the repository has an unambiguous mechanism. `AUTOMATABLE` is limited to supported npm-managed tools; Codex CLI falls back to `MANUAL` or `UNKNOWN` for Windows App/MSIX, binary, metadata-only, or otherwise ambiguous installations. Unsupported tools remain `UNKNOWN` without guessed commands. These fields are data only; PLAN never executes them and provides no APPLY operation.
 
+## Update Apply (Stage B)
+
+Explicitly apply an available update for supported npm-managed CLI tools:
+
+```powershell
+python scripts/update_apply.py --tool OpenCodex
+python scripts/update_apply.py --tool Wrangler
+python scripts/update_apply.py --tool "Codex CLI"
+```
+
+`update_apply.py` is an optional, foreground-only execution tool. It operates under strict safety constraints:
+- **Allowlisted tools only**: OpenCodex (`@bitkyc08/opencodex`), Wrangler (`wrangler`), and Codex CLI (`@openai/codex`). Codex CLI is supported only when installed via npm; Windows App/MSIX or binary installs are rejected. Unsupported tools remain PLAN/manual only.
+- **One tool at a time**: Batch updates and `--all` are not supported.
+- **Interactive confirmation**: Prompts for confirmation by default before any mutation; pass `--yes` to proceed non-interactively in foreground scripts.
+- **No privilege escalation**: Runs within the user's existing privileges; if npm requires administrative elevation, the update halts immediately with manual instructions.
+- **Pre-execution freshness checks**: Freshly re-verifies installed and target versions immediately before execution to prevent race conditions (TOCTOU).
+- **Structured execution**: Invokes npm directly using structured argument vectors (`shell=False`) with bounded timeouts and exact version pinning.
+- **Post-update verification**: Re-probes the tool locally after npm completes and confirms the new version and health status before reporting success.
+- **No automated rollback**: If an update or verification fails, WUP halts cleanly and outputs deterministic manual recovery guidance referencing the exact previous version.
+- **No background automation**: APPLY is never invoked by scheduled tasks or notification monitors.
+
 ## Status snapshot
 
 `status_snapshot.py` is a pure projection for a future local static report. It consumes an already-produced audit report and exposes only a tool's name, installed/latest versions, status, health, existing release/docs URL, and fixed provenance (`LOCAL` for installed version, `REMOTE` for latest version). It does not run probes, use the network, read or write state, or retain diagnostics, environment data, credentials, or raw provider payloads. WUP currently has only an audit-report timestamp; the snapshot preserves that explicitly as `audit_report_timestamp` and reports independent per-tool local and remote observation timestamps as JSON `null` / text `unknown` rather than fabricating freshness.
