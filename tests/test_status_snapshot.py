@@ -44,6 +44,13 @@ class StatusSnapshotTest(unittest.TestCase):
             "remote_observed_at": None, "installed_version_provenance": LOCAL,
             "latest_version_provenance": REMOTE, "release_or_docs_url": "https://example.test/releases/1.2.4",
         }, data["tools"][0])
+        self.assertEqual({
+            "local_runtime": "UNKNOWN",
+            "local_tunnel_client": "UNKNOWN",
+            "remote_connector": "UNKNOWN",
+            "last_remote_success_at": None,
+            "classification": "UNKNOWN",
+        }, data["execution_path"])
 
     def test_missing_timestamps_are_null_unknown_and_not_fabricated(self):
         snapshot = build_status_snapshot(self.complete_report())
@@ -77,9 +84,16 @@ class StatusSnapshotTest(unittest.TestCase):
         snapshot = build_status_snapshot(report)
         self.assertEqual("Wrangler", snapshot.tools[0].tool_name)
         self.assertEqual("https://example.test/wrangler", snapshot.tools[0].release_or_docs_url)
+        self.assertEqual("UNKNOWN", snapshot.execution_path.classification)
 
     def test_no_execution_network_or_writes(self):
         report = self.complete_report()
+        report["execution_path"] = {
+            "local_runtime": "HEALTHY",
+            "local_tunnel_client": "HEALTHY",
+            "remote_connector": "HEALTHY",
+            "last_remote_success_at": "2026-09-04T09:36:00Z",
+        }
         with (
             patch.object(subprocess, "run", side_effect=AssertionError("executed")) as run,
             patch.object(subprocess, "Popen", side_effect=AssertionError("executed")) as popen,
@@ -100,9 +114,86 @@ class StatusSnapshotTest(unittest.TestCase):
             "environment": {"HOME": "C:/machine/path/sentinel"},
             "update_recommendation": {"proposed_command": "COMMAND_SENTINEL"},
         })
+        report["execution_path"] = {
+            "local_runtime": "HEALTHY",
+            "local_tunnel_client": "HEALTHY",
+            "remote_connector": "HEALTHY",
+            "last_remote_success_at": "2026-09-04T09:36:00Z",
+            "raw_error": "EXECUTION_SECRET_SENTINEL",
+        }
         original = copy.deepcopy(report)
         snapshot = build_status_snapshot(report)
         self.assertEqual(original, report)
         rendered = format_status_snapshot_json(snapshot) + format_status_snapshot_text(snapshot)
-        for sentinel in ("SECRET_SENTINEL", "RAW_TOKEN_SENTINEL", "machine/path/sentinel", "COMMAND_SENTINEL"):
+        for sentinel in (
+            "SECRET_SENTINEL", "RAW_TOKEN_SENTINEL", "machine/path/sentinel",
+            "COMMAND_SENTINEL", "EXECUTION_SECRET_SENTINEL",
+        ):
             self.assertNotIn(sentinel, rendered)
+
+    def test_execution_path_all_healthy_classifies_healthy(self):
+        report = self.complete_report()
+        report["execution_path"] = {
+            "local_runtime": "HEALTHY",
+            "local_tunnel_client": "HEALTHY",
+            "remote_connector": "HEALTHY",
+            "last_remote_success_at": "2026-09-04T09:36:00Z",
+        }
+        execution = build_status_snapshot(report).execution_path
+        self.assertEqual("HEALTHY", execution.classification)
+        self.assertEqual("2026-09-04T09:36:00Z", execution.last_remote_success_at)
+
+    def test_remote_or_tunnel_failure_does_not_become_host_failure(self):
+        for failing_field in ("local_tunnel_client", "remote_connector"):
+            report = self.complete_report()
+            report["execution_path"] = {
+                "local_runtime": "HEALTHY",
+                "local_tunnel_client": "HEALTHY",
+                "remote_connector": "HEALTHY",
+            }
+            report["execution_path"][failing_field] = "DEGRADED"
+            execution = build_status_snapshot(report).execution_path
+            self.assertEqual("EXECUTION_PATH_DEGRADED", execution.classification)
+            self.assertNotEqual("HOST_RUNTIME_DEGRADED", execution.classification)
+
+    def test_local_runtime_degraded_classifies_host_runtime_degraded(self):
+        report = self.complete_report()
+        report["execution_path"] = {
+            "local_runtime": "DEGRADED",
+            "local_tunnel_client": "UNKNOWN",
+            "remote_connector": "DEGRADED",
+        }
+        self.assertEqual(
+            "HOST_RUNTIME_DEGRADED",
+            build_status_snapshot(report).execution_path.classification,
+        )
+
+    def test_invalid_execution_path_values_are_rejected_to_unknown(self):
+        report = self.complete_report()
+        report["execution_path"] = {
+            "local_runtime": "BROKEN",
+            "local_tunnel_client": "YES",
+            "remote_connector": 200,
+            "classification": "HOST_FAILURE",
+            "last_remote_success_at": 123,
+        }
+        execution = build_status_snapshot(report).execution_path
+        self.assertEqual("UNKNOWN", execution.local_runtime)
+        self.assertEqual("UNKNOWN", execution.local_tunnel_client)
+        self.assertEqual("UNKNOWN", execution.remote_connector)
+        self.assertEqual("UNKNOWN", execution.classification)
+        self.assertIsNone(execution.last_remote_success_at)
+
+    def test_text_surface_includes_execution_path_domains(self):
+        report = self.complete_report()
+        report["execution_path"] = {
+            "local_runtime": "HEALTHY",
+            "local_tunnel_client": "DEGRADED",
+            "remote_connector": "UNKNOWN",
+        }
+        rendered = format_status_snapshot_text(build_status_snapshot(report))
+        self.assertIn("Execution path:", rendered)
+        self.assertIn("Local runtime: HEALTHY", rendered)
+        self.assertIn("Local tunnel client: DEGRADED", rendered)
+        self.assertIn("Remote connector: UNKNOWN", rendered)
+        self.assertIn("Classification: EXECUTION_PATH_DEGRADED", rendered)
