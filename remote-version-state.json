@@ -1,13 +1,13 @@
 {
-  "observed_at": "2026-09-04T11:34:04.474053+00:00",
+  "observed_at": "2026-09-05T10:49:47.758508+00:00",
   "tools": {
     "Bun": {
-      "latest_version": "1.4.1",
-      "release_url": "https://github.com/oven-sh/bun/releases/tag/bun-v1.4.1"
+      "latest_version": "1.4.2",
+      "release_url": "https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2"
     },
     "Codex CLI": {
-      "latest_version": "0.153.2",
-      "release_url": "https://www.npmjs.com/package/@openai/codex/v/0.153.2"
+      "latest_version": "0.153.4",
+      "release_url": "https://www.npmjs.com/package/@openai/codex/v/0.153.4"
     },
     "Git": {
       "latest_version": "2.55.0",
