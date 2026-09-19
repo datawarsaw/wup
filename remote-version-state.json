@@ -1,13 +1,13 @@
 {
-  "observed_at": "2026-09-18T11:37:02.564189+00:00",
+  "observed_at": "2026-09-19T11:20:20.792912+00:00",
   "tools": {
     "Bun": {
       "latest_version": "1.4.2",
       "release_url": "https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2"
     },
     "Codex CLI": {
-      "latest_version": "0.155.0",
-      "release_url": "https://www.npmjs.com/package/@openai/codex/v/0.155.0"
+      "latest_version": "0.155.1",
+      "release_url": "https://www.npmjs.com/package/@openai/codex/v/0.155.1"
     },
     "Git": {
       "latest_version": "2.55.0",
@@ -18,12 +18,12 @@
       "release_url": "https://nodejs.org/en/blog/release/v26.9.0"
     },
     "OpenCodex": {
-      "latest_version": "2.58.0",
-      "release_url": "https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.58.0"
+      "latest_version": "2.59.0",
+      "release_url": "https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.59.0"
     },
     "Wrangler": {
-      "latest_version": "4.134.0",
-      "release_url": "https://www.npmjs.com/package/wrangler/v/4.134.0"
+      "latest_version": "4.135.0",
+      "release_url": "https://www.npmjs.com/package/wrangler/v/4.135.0"
     },
     "npm": {
       "latest_version": "12.0.2",
