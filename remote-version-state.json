@@ -1,5 +1,5 @@
 {
-  "observed_at": "2026-09-21T13:09:05.962352+00:00",
+  "observed_at": "2026-09-22T11:56:49.474244+00:00",
   "tools": {
     "Bun": {
       "latest_version": "1.4.2",
@@ -14,16 +14,16 @@
       "release_url": "https://github.com/git-for-windows/git/releases/tag/v2.55.0.windows.5"
     },
     "Node.js": {
-      "latest_version": "26.9.0",
-      "release_url": "https://nodejs.org/en/blog/release/v26.9.0"
+      "latest_version": "26.10.0",
+      "release_url": "https://nodejs.org/en/blog/release/v26.10.0"
     },
     "OpenCodex": {
       "latest_version": "2.59.0",
       "release_url": "https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.59.0"
     },
     "Wrangler": {
-      "latest_version": "4.135.0",
-      "release_url": "https://www.npmjs.com/package/wrangler/v/4.135.0"
+      "latest_version": "4.136.2",
+      "release_url": "https://www.npmjs.com/package/wrangler/v/4.136.2"
     },
     "npm": {
       "latest_version": "12.0.2",
