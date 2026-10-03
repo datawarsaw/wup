@@ -1,5 +1,5 @@
 {
-  "observed_at": "2026-10-02T12:59:12.407773+00:00",
+  "observed_at": "2026-10-03T11:53:16.151109+00:00",
   "tools": {
     "Bun": {
       "latest_version": "1.4.2",
@@ -18,8 +18,8 @@
       "release_url": "https://nodejs.org/en/blog/release/v26.10.0"
     },
     "OpenCodex": {
-      "latest_version": "2.75.0",
-      "release_url": "https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.75.0"
+      "latest_version": "2.76.0",
+      "release_url": "https://www.npmjs.com/package/@bitkyc08/opencodex/v/2.76.0"
     },
     "Wrangler": {
       "latest_version": "4.147.0",
