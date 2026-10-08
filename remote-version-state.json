@@ -1,21 +1,21 @@
 {
-  "observed_at": "2026-10-07T13:42:47.257562+00:00",
+  "observed_at": "2026-10-08T13:51:09.038447+00:00",
   "tools": {
     "Bun": {
       "latest_version": "1.4.2",
       "release_url": "https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2"
     },
     "Codex CLI": {
-      "latest_version": "0.160.1",
-      "release_url": "https://www.npmjs.com/package/@openai/codex/v/0.160.1"
+      "latest_version": "0.161.0",
+      "release_url": "https://www.npmjs.com/package/@openai/codex/v/0.161.0"
     },
     "Git": {
       "latest_version": "2.56.0",
       "release_url": "https://github.com/git-for-windows/git/releases/tag/v2.56.0.windows.1"
     },
     "Node.js": {
-      "latest_version": "26.10.0",
-      "release_url": "https://nodejs.org/en/blog/release/v26.10.0"
+      "latest_version": "26.11.1",
+      "release_url": "https://nodejs.org/en/blog/release/v26.11.1"
     },
     "OpenCodex": {
       "latest_version": "2.80.0",
