@@ -16,20 +16,15 @@ ALLOWED_KEYS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
 
 
 def load_credentials(environment: dict[str, str] | None = None, env_file: str | None = None) -> dict[str, str]:
-    environment = environment or os.environ
-    values = {key: environment.get(key, "") for key in ALLOWED_KEYS}
-    path = env_file if env_file is not None else environment.get("WUP_TELEGRAM_ENV_FILE", "")
-    if not path or all(values.values()): return values
+    """Load Telegram credentials exclusively from Windows CurrentUser DPAPI."""
+    from telegram_secrets import load_telegram_secrets, SecretLoadError
     try:
-        with open(path, encoding="utf-8") as stream:
-            for raw in stream:
-                line = raw.strip()
-                if "=" not in line or line.startswith("#"): continue
-                key, value = line.split("=", 1)
-                if key in ALLOWED_KEYS and not values[key]: values[key] = value.strip()
-    except OSError:
+        values = load_telegram_secrets()
+        if set(values) != set(ALLOWED_KEYS) or not all(values.values()):
+            return {key: "" for key in ALLOWED_KEYS}
         return values
-    return values
+    except (SecretLoadError, OSError, ValueError, UnicodeError):
+        return {key: "" for key in ALLOWED_KEYS}
 
 
 def send(message: str, environment: dict[str, str] | None = None) -> bool:
