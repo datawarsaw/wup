@@ -48,17 +48,28 @@ class PortabilityTests(unittest.TestCase):
         self.assertNotIn("code-skills", workflow)
         self.assertIn("scripts/remote_version_sentinel.py", workflow)
 
-    def test_telegram_env_file_is_narrow_and_process_environment_wins(self):
+    def test_telegram_credentials_load_from_dpapi(self):
+        from unittest.mock import patch
+        expected = {"TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN", "TELEGRAM_CHAT_ID": "12345"}
+        with patch("telegram_secrets.load_telegram_secrets", return_value=expected):
+            self.assertEqual(load_credentials(), expected)
+
+    def test_telegram_ignores_plaintext_and_environment(self):
+        from unittest.mock import patch
+        expected = {"TELEGRAM_BOT_TOKEN": "123456789:DPAPI_TOKEN", "TELEGRAM_CHAT_ID": "12345"}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "secrets.env"
-            path.write_text("TELEGRAM_BOT_TOKEN=file-token\nTELEGRAM_CHAT_ID=file-chat\nUNRELATED=value\n", encoding="utf-8")
-            values = load_credentials({"TELEGRAM_BOT_TOKEN": "process-token", "WUP_TELEGRAM_ENV_FILE": str(path)})
-            self.assertEqual(values, {"TELEGRAM_BOT_TOKEN": "process-token", "TELEGRAM_CHAT_ID": "file-chat"})
-            self.assertNotIn("UNRELATED", values)
+            path.write_text("TELEGRAM_BOT_TOKEN=FILE_TOKEN\nTELEGRAM_CHAT_ID=FILE_CHAT\n", encoding="utf-8")
+            with patch("telegram_secrets.load_telegram_secrets", return_value=expected):
+                actual = load_credentials({"TELEGRAM_BOT_TOKEN": "ENV_TOKEN", "TELEGRAM_CHAT_ID": "ENV_CHAT", "WUP_TELEGRAM_ENV_FILE": str(path)}, str(path))
+                self.assertEqual(actual, expected)
 
-    def test_missing_or_malformed_telegram_env_file_exposes_no_secret_material(self):
-        values = load_credentials({"WUP_TELEGRAM_ENV_FILE": "C:/does-not-exist/secrets.env"})
-        self.assertEqual(values, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""})
+    def test_telegram_dpapi_failure_returns_empty_credentials(self):
+        from unittest.mock import patch
+        from telegram_secrets import SecretLoadError
+        with patch("telegram_secrets.load_telegram_secrets", side_effect=SecretLoadError("DPAPI unavailable")):
+            actual = load_credentials({"TELEGRAM_BOT_TOKEN": "ENV_TOKEN", "TELEGRAM_CHAT_ID": "ENV_CHAT"})
+            self.assertEqual(actual, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""})
 
     def test_public_workflow_uses_private_snapshot_secret_and_daily_schedule(self):
         workflow = (ROOT / ".github" / "workflows" / "toolchain-remote-version-sentinel.yml").read_text(encoding="utf-8")
