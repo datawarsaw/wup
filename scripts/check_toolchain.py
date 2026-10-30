@@ -219,7 +219,7 @@ REMOTE_TOOL_PROVIDER_REGISTRY = (
     RemoteToolProvider("Bun", "https://api.github.com/repos/oven-sh/bun/releases/latest", "github_release", "https://github.com/oven-sh/bun/releases", 6),
 )
 
-# Kept as the public source mapping used by the remote sentinel.
+# Public upstream sources shared by local probes.
 REMOTE_VERSION_SOURCES = {provider.name: provider.source for provider in REMOTE_TOOL_PROVIDER_REGISTRY}
 
 
@@ -1678,7 +1678,7 @@ validate_catalog_consistency()
 
 def format_text_report(report: ToolchainAuditReport) -> str:
     lines: List[str] = []
-    lines.append(f"Daily Toolchain Watch - {report.date}")
+    lines.append(f"WUP Toolchain Audit - {report.date}")
     lines.append("")
 
     lines.append(f"{'Tool':<26} {'Installed':<15} {'Latest':<15} {'Status':<10}")
@@ -1739,12 +1739,22 @@ def format_json_report(report: ToolchainAuditReport) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Daily Toolchain Watch V1")
+    parser = argparse.ArgumentParser(description="On-demand toolchain audit")
+    parser.add_argument("--config", type=Path, help="optional WUP TOML configuration")
     parser.add_argument("--json", action="store_true", help="Emit report in machine-readable JSON format")
     parser.add_argument("--offline", action="store_true", help="Force offline mode (skip all network requests)")
     parser.add_argument("--timeout", type=float, default=3.0, help="Network timeout in seconds (default 3.0)")
     parser.add_argument("--mock-data", type=str, default=None, help="Path to JSON file with mocked network responses")
     args = parser.parse_args()
+
+    from wup_config import apply_runtime_config, default_config_path, load_config
+    try:
+        config_path = args.config or default_config_path()
+        if config_path.exists():
+            apply_runtime_config(load_config(config_path))
+    except (OSError, ValueError):
+        print("Error loading WUP configuration", file=sys.stderr)
+        return 1
 
     mock_data = None
     if args.mock_data:

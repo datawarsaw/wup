@@ -11,9 +11,6 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from update_plan import (
-    UpdatePlan,
-    UpdatePlanEntry,
-    UpdatePlanSummary,
     build_update_plan,
     format_text_plan,
 )

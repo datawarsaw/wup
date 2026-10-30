@@ -14,13 +14,12 @@ Security reports are especially useful for:
 
 - credential or environment-variable disclosure;
 - unsafe logging or error output;
-- unintended state-branch data exposure;
-- command injection through configuration or notification adapters;
-- scheduler or subprocess behavior that could execute unintended commands;
-- incorrect trust boundaries between local workstation facts and remote upstream observations.
+- unintended disclosure of local audit, history, or status data;
+- subprocess behavior in the explicit update path that could execute unintended commands;
+- incorrect separation between locally observed versions and public upstream release facts.
 
 ## Current security posture
 
-WUP is read-only by default. It does not automatically install or upgrade monitored software. Configuration examples contain no credentials, and runtime/deduplication state is kept outside the source tree.
+WUP is read-only by default. It does not automatically install or upgrade monitored software. Configuration examples contain no credentials, and local change history is kept outside the source tree. The optional update command is explicit, foreground-only, and limited to supported npm-managed tools.
 
 The project is early-stage. Security fixes may change interfaces when necessary to preserve a safe default.

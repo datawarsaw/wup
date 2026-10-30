@@ -1,8 +1,7 @@
 """Append-only local history for meaningful WUP tool observations.
 
-This module is deliberately separate from alert deduplication and remote
-sentinel state.  Callers provide existing audit observations; no probes,
-network requests, notifications, or configuration mutation occur here.
+Callers provide existing audit observations; no probes, network requests,
+or configuration mutation occur here.
 """
 from __future__ import annotations
 

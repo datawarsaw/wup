@@ -2,11 +2,12 @@
 
 ## 1. Scope & Objective
 
-The Daily Toolchain Watch provides a deterministic, strictly read-only audit of the AI workstation toolchain. It answers:
+WUP provides a deterministic, strictly read-only local audit of the AI
+workstation toolchain. The on-demand command is `check_toolchain.py`. It answers:
 
 > Are the important AI workstation tools installed, healthy, and on the latest appropriate stable version?
 
-This capability is NOT a general Windows package inventory or an autonomous updater. It adheres strictly to the observation-only principle: no automatic installations, updates, restarts, or configuration mutations.
+This capability is NOT a general Windows package inventory or an autonomous updater. The audit performs no installations, updates, restarts, or configuration mutations. The separate `update_apply.py` command is optional, explicit, foreground-only, and allowlisted; the audit never invokes it.
 
 ---
 
