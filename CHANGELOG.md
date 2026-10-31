@@ -10,4 +10,5 @@ All notable WUP changes will be recorded here until a release-based changelog is
 - Removed Windows Task Scheduler integration, the GitHub Actions Remote Version Sentinel, remote state, and workstation-snapshot publishing.
 - Narrowed configuration to `[tools]` and `[local]`. Legacy `[notifications]` and `[remote]` sections are ignored.
 - Removed `--state-path` and `--skip-scheduler` from `doctor.py` and `preflight.py`. Doctor diagnostics now check repository integrity, configuration validity, and runtime prerequisites only.
+- Fixed two `check_toolchain.py` CLI regressions: an explicitly supplied `--config` path that does not exist now fails with a clear error instead of silently using default settings, and module execution (`python -m scripts.check_toolchain`) is supported next to direct script execution.
 - Added the WUP logo, public-facing README, MIT license, contribution guide, security policy, and CI baseline.
