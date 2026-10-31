@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import os
 import subprocess
 import sys
 import unittest
@@ -13,10 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import update_apply
 from check_toolchain import ToolCheckResult
 from update_apply import (
-    APPLY_ALLOWLIST,
     apply_update,
     main,
-    probe_single_tool,
     resolve_npm_executable,
     validate_target_version,
 )
@@ -469,10 +466,11 @@ class TestUpdateApply(unittest.TestCase):
             "scripts/remote_version_sentinel.py",
         ]:
             p = root / rel
-            if p.exists():
-                content = p.read_text(encoding="utf-8")
-                self.assertNotIn("update_apply", content)
-                self.assertNotIn("--apply", content)
+            self.assertFalse(p.exists(), f"removed notification infrastructure still present: {rel}")
+
+        source = (root / "scripts" / "update_apply.py").read_text(encoding="utf-8")
+        for marker in ("run_notifier", "notifier", "scheduler", "scheduled", "telegram"):
+            self.assertNotIn(marker, source.lower())
 
     def test_case_29_history_integration_is_deferred(self):
         self.assertTrue(hasattr(update_apply, "apply_update"))

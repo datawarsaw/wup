@@ -16,7 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from unittest.mock import patch
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
@@ -31,7 +31,6 @@ from check_toolchain import (
     ToolchainAuditReport,
     ToolchainAuditor,
     ToolCheckResult,
-    UpdateRecommendation,
     format_json_report,
     format_text_report,
     redact_secrets,

@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from change_history import HistoryError, format_history_json, main, record_observations, view_history
+from change_history import format_history_json, main, record_observations, view_history
 
 
 def tool(name="Codex CLI", installed="1.0", latest="1.0", status="CURRENT", health="HEALTHY"):

@@ -88,8 +88,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="path to configuration file")
     parser.add_argument("--repo-root", type=Path, help="path to repository root")
-    parser.add_argument("--state-path", type=Path, help="path to state file")
-    parser.add_argument("--skip-scheduler", action="store_true", help="skip Windows Task Scheduler inspection")
     parser.add_argument("--json", action="store_true", help="output report as deterministic JSON")
     args = parser.parse_args(argv)
 
@@ -97,8 +95,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         doctor_report = doctor.diagnose(
             repo_root=args.repo_root,
             config_path=args.config,
-            state_path=args.state_path,
-            check_scheduler_task=not args.skip_scheduler,
         )
         report = project_doctor_report(doctor_report)
         print(format_json_report(report) if args.json else format_text_report(report))

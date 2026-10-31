@@ -23,6 +23,15 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+if __package__:
+    # Module execution (`python -m scripts.check_toolchain`): the sibling
+    # configuration module resolves through the package.
+    from .wup_config import apply_runtime_config, default_config_path, load_config
+else:
+    # Direct script execution (`python scripts/check_toolchain.py`): the sibling
+    # configuration module resolves through the script directory.
+    from wup_config import apply_runtime_config, default_config_path, load_config
+
 
 # ---------------------------------------------------------------------------
 # Semantic Versioning Helper
@@ -219,7 +228,7 @@ REMOTE_TOOL_PROVIDER_REGISTRY = (
     RemoteToolProvider("Bun", "https://api.github.com/repos/oven-sh/bun/releases/latest", "github_release", "https://github.com/oven-sh/bun/releases", 6),
 )
 
-# Kept as the public source mapping used by the remote sentinel.
+# Public upstream sources shared by local probes.
 REMOTE_VERSION_SOURCES = {provider.name: provider.source for provider in REMOTE_TOOL_PROVIDER_REGISTRY}
 
 
@@ -1678,7 +1687,7 @@ validate_catalog_consistency()
 
 def format_text_report(report: ToolchainAuditReport) -> str:
     lines: List[str] = []
-    lines.append(f"Daily Toolchain Watch - {report.date}")
+    lines.append(f"WUP Toolchain Audit - {report.date}")
     lines.append("")
 
     lines.append(f"{'Tool':<26} {'Installed':<15} {'Latest':<15} {'Status':<10}")
@@ -1739,12 +1748,31 @@ def format_json_report(report: ToolchainAuditReport) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Daily Toolchain Watch V1")
+    parser = argparse.ArgumentParser(description="On-demand toolchain audit")
+    parser.add_argument("--config", type=Path, help="optional WUP TOML configuration (an explicit path must exist)")
     parser.add_argument("--json", action="store_true", help="Emit report in machine-readable JSON format")
     parser.add_argument("--offline", action="store_true", help="Force offline mode (skip all network requests)")
     parser.add_argument("--timeout", type=float, default=3.0, help="Network timeout in seconds (default 3.0)")
     parser.add_argument("--mock-data", type=str, default=None, help="Path to JSON file with mocked network responses")
     args = parser.parse_args()
+
+    config_path = args.config if args.config is not None else default_config_path()
+    if args.config is not None:
+        # An explicitly requested configuration must be readable. Silently
+        # falling back to defaults would hide a wrong path from the operator.
+        if not args.config.exists():
+            print(f"Error: configuration file not found: {args.config}", file=sys.stderr)
+            return 1
+        if not args.config.is_file():
+            print(f"Error: configuration path is not a file: {args.config}", file=sys.stderr)
+            return 1
+    if config_path.exists():
+        # The default configuration is optional; its absence stays supported.
+        try:
+            apply_runtime_config(load_config(config_path))
+        except (OSError, ValueError) as exc:
+            print(f"Error loading WUP configuration: {exc}", file=sys.stderr)
+            return 1
 
     mock_data = None
     if args.mock_data:

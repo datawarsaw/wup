@@ -9,20 +9,4 @@ state_dir = ""
 # Optional local Workstation Ops/MCP repository for its audit check. Leave empty when unavailable.
 workstation_ops_path = ""
 
-[notifications.telegram]
-# Telegram credentials are read from TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
-enabled = false
-# Optional local file containing only TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
-# Keep it outside this repository and leave empty when process environment is used.
-env_file = ""
-
-[notifications.email]
-# Optional command whose executable accepts: send --subject TEXT --text TEXT --html TEXT
-# command = "node C:\\path\\to\\cloudflare-email-cli.js"
-command = ""
-
-[remote]
-# Required only for publishing the sanitized local snapshot to a private GitHub Actions secret.
-repository = ""
-state_branch = "toolchain-remote-state"
-publish_snapshot = false
+# Legacy [notifications] and [remote] sections are ignored. Remove them if present.

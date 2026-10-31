@@ -33,10 +33,10 @@ class TestPreflightProjection(unittest.TestCase):
         self.assertEqual([], report.optional_warnings)
 
     def test_degraded_optional_report_is_ready_with_warning(self) -> None:
-        report = project_doctor_report(DoctorReport("DEGRADED", [DoctorCheck("scheduler", "DEGRADED", "optional")]))
+        report = project_doctor_report(DoctorReport("DEGRADED", [DoctorCheck("runtime", "DEGRADED", "optional")]))
         self.assertTrue(report.ready)
         self.assertEqual(0, preflight_exit_code(report))
-        self.assertEqual(["scheduler"], [finding.name for finding in report.optional_warnings])
+        self.assertEqual(["runtime"], [finding.name for finding in report.optional_warnings])
 
     def test_unhealthy_report_is_not_ready_with_blocker(self) -> None:
         report = project_doctor_report(DoctorReport("UNHEALTHY", [DoctorCheck("configuration", "UNHEALTHY", "invalid")]))
@@ -77,7 +77,7 @@ class TestPreflightProjection(unittest.TestCase):
 
     def test_text_output_has_human_sections(self) -> None:
         report = project_doctor_report(
-            DoctorReport("UNHEALTHY", [DoctorCheck("repository", "UNHEALTHY", "missing"), DoctorCheck("scheduler", "DEGRADED", "optional")])
+            DoctorReport("UNHEALTHY", [DoctorCheck("repository", "UNHEALTHY", "missing"), DoctorCheck("runtime", "DEGRADED", "optional")])
         )
         rendered = format_text_report(report)
         self.assertIn("WUP Setup Preflight", rendered)
@@ -87,33 +87,39 @@ class TestPreflightProjection(unittest.TestCase):
 
 class TestPreflightCli(unittest.TestCase):
     def test_main_evaluates_doctor_once(self) -> None:
-        doctor_report = DoctorReport("DEGRADED", [DoctorCheck("scheduler", "DEGRADED", "optional")])
+        doctor_report = DoctorReport("DEGRADED", [DoctorCheck("runtime", "DEGRADED", "optional")])
         output = io.StringIO()
         with patch("preflight.doctor.diagnose", return_value=doctor_report) as diagnose, redirect_stdout(output):
-            self.assertEqual(0, main(["--json", "--skip-scheduler"]))
+            self.assertEqual(0, main(["--json"]))
         self.assertEqual(1, diagnose.call_count)
-        self.assertEqual(["scheduler"], [item["name"] for item in json.loads(output.getvalue())["optional_warnings"]])
+        self.assertEqual(["runtime"], [item["name"] for item in json.loads(output.getvalue())["optional_warnings"]])
 
     def test_internal_failure_returns_two_without_exception_text(self) -> None:
         error = io.StringIO()
         with patch("preflight.doctor.diagnose", side_effect=RuntimeError("SECRET_PREFLIGHT_SENTINEL")), redirect_stderr(error):
-            self.assertEqual(2, main(["--json", "--skip-scheduler"]))
+            self.assertEqual(2, main(["--json"]))
         self.assertEqual("WUP setup preflight could not complete.\n", error.getvalue())
         self.assertNotIn("SECRET_PREFLIGHT_SENTINEL", error.getvalue())
+
+    def test_removed_cli_flags_are_rejected(self) -> None:
+        for flag in (["--state-path", "state.json"], ["--skip-scheduler"]):
+            with self.subTest(flag=flag):
+                with redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as raised:
+                        main(flag)
+                self.assertEqual(2, raised.exception.code)
 
     def test_real_preflight_does_not_mutate_fixture(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="wup-preflight-test-"))
         try:
             (root / "scripts").mkdir()
-            for name in ("check_toolchain.py", "run_notifier.py", "wup_config.py"):
+            for name in ("check_toolchain.py", "wup_config.py"):
                 (root / "scripts" / name).write_text("# mock", encoding="utf-8")
             config_path = root / "wup.toml"
             config_path.write_text("[tools]\nenabled = []\n", encoding="utf-8")
-            state_path = root / "state.json"
-            state_path.write_text('{"version": 2}', encoding="utf-8")
             before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
             with redirect_stdout(io.StringIO()):
-                self.assertEqual(0, main(["--repo-root", str(root), "--config", str(config_path), "--state-path", str(state_path), "--skip-scheduler"]))
+                self.assertEqual(0, main(["--repo-root", str(root), "--config", str(config_path)]))
             after = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
             self.assertEqual(before, after)
         finally:

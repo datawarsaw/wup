@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -20,8 +19,6 @@ from doctor import (
     check_configuration,
     check_repository,
     check_runtime,
-    check_scheduler,
-    check_state,
     doctor_exit_code,
     diagnose,
     format_json_report,
@@ -37,14 +34,10 @@ class TestDoctor(unittest.TestCase):
         self.repo_root.mkdir()
         (self.repo_root / "scripts").mkdir()
         (self.repo_root / "scripts" / "check_toolchain.py").write_text("# mock", encoding="utf-8")
-        (self.repo_root / "scripts" / "run_notifier.py").write_text("# mock", encoding="utf-8")
         (self.repo_root / "scripts" / "wup_config.py").write_text("# mock", encoding="utf-8")
 
         self.config_path = self.repo_root / "wup.toml"
         self.config_path.write_text("[tools]\nenabled = []\n", encoding="utf-8")
-
-        self.state_path = self.test_dir / "last-alerted.json"
-        self.state_path.write_text(json.dumps({"version": 2, "last_alerted": {}}), encoding="utf-8")
 
     def tearDown(self) -> None:
         shutil.rmtree(self.test_dir, ignore_errors=True)
@@ -54,8 +47,6 @@ class TestDoctor(unittest.TestCase):
         report = diagnose(
             repo_root=self.repo_root,
             config_path=self.config_path,
-            state_path=self.state_path,
-            check_scheduler_task=False,
         )
         self.assertEqual(report.status, "HEALTHY")
         self.assertTrue(all(c.status == "HEALTHY" for c in report.checks))
@@ -66,8 +57,6 @@ class TestDoctor(unittest.TestCase):
         report = diagnose(
             repo_root=self.repo_root,
             config_path=self.config_path,
-            state_path=self.state_path,
-            check_scheduler_task=False,
         )
         self.assertEqual(report.status, "UNHEALTHY")
         repo_check = next(c for c in report.checks if c.name == "repository")
@@ -80,71 +69,33 @@ class TestDoctor(unittest.TestCase):
         report = diagnose(
             repo_root=self.repo_root,
             config_path=self.config_path,
-            state_path=self.state_path,
-            check_scheduler_task=False,
         )
         self.assertEqual(report.status, "UNHEALTHY")
         cfg_check = next(c for c in report.checks if c.name == "configuration")
         self.assertEqual(cfg_check.status, "UNHEALTHY")
         self.assertIn("invalid configuration", cfg_check.message)
 
-    def test_case_4_malformed_state_fails_actionably(self) -> None:
-        """Case 4: Corrupted state JSON reports UNHEALTHY."""
-        self.state_path.write_text("{not valid json", encoding="utf-8")
-        report = diagnose(
-            repo_root=self.repo_root,
-            config_path=self.config_path,
-            state_path=self.state_path,
-            check_scheduler_task=False,
-        )
-        self.assertEqual(report.status, "UNHEALTHY")
-        state_check = next(c for c in report.checks if c.name == "state")
-        self.assertEqual(state_check.status, "UNHEALTHY")
-        self.assertIn("unreadable or malformed state file", state_check.message)
-
-    def test_case_5_optional_missing_state_does_not_fail(self) -> None:
-        """Case 5: Missing state file is acceptable on clean install and reports HEALTHY."""
-        self.state_path.unlink()
-        report = diagnose(
-            repo_root=self.repo_root,
-            config_path=self.config_path,
-            state_path=self.state_path,
-            check_scheduler_task=False,
-        )
-        self.assertEqual(report.status, "HEALTHY")
-        state_check = next(c for c in report.checks if c.name == "state")
-        self.assertEqual(state_check.status, "HEALTHY")
-        self.assertIn("not yet present", state_check.message)
-
-    def test_case_6_optional_missing_config_uses_defaults(self) -> None:
-        """Missing config is optional and reports HEALTHY."""
+    def test_case_4_optional_missing_config_uses_defaults(self) -> None:
+        """Case 4: Missing config is optional and reports HEALTHY."""
         self.config_path.unlink()
         report = diagnose(
             repo_root=self.repo_root,
             config_path=self.config_path,
-            state_path=self.state_path,
-            check_scheduler_task=False,
         )
         self.assertEqual(report.status, "HEALTHY")
         cfg_check = next(c for c in report.checks if c.name == "configuration")
         self.assertEqual(cfg_check.status, "HEALTHY")
         self.assertIn("using defaults", cfg_check.message)
 
-    def test_case_7_missing_runtime_executable_detected(self) -> None:
-        """Case 6 (prompt): Missing required runtime tool (git) is detected as DEGRADED."""
+    def test_case_5_missing_runtime_executable_detected(self) -> None:
+        """Case 5: Missing required runtime tool (git) is detected as DEGRADED."""
         with patch("shutil.which", return_value=None):
             check = check_runtime()
         self.assertEqual(check.status, "DEGRADED")
         self.assertIn("git", check.message)
 
-    def test_case_8_scheduler_inspection_handled_read_only(self) -> None:
-        """Case 7 (prompt): Scheduler inspection failure or absence is handled without raising exception."""
-        with patch("subprocess.run", side_effect=OSError("simulated error")):
-            check = check_scheduler()
-        self.assertIn(check.status, ("HEALTHY", "DEGRADED"))
-
-    def test_case_9_mutation_proof_guarantee(self) -> None:
-        """Step 10: Prove doctor execution never creates, modifies, or deletes any file."""
+    def test_case_6_mutation_proof_guarantee(self) -> None:
+        """Case 6: Prove doctor execution never creates, modifies, or deletes any file."""
         def capture_snapshot(root: Path) -> dict[str, tuple[int, bytes]]:
             snapshot = {}
             for path in sorted(root.rglob("*")):
@@ -155,25 +106,57 @@ class TestDoctor(unittest.TestCase):
 
         before = capture_snapshot(self.test_dir)
 
-        # Execute doctor multiple times
-        diagnose(repo_root=self.repo_root, config_path=self.config_path, state_path=self.state_path, check_scheduler_task=False)
-        diagnose(repo_root=self.repo_root, config_path=self.config_path, state_path=self.state_path, check_scheduler_task=False)
+        diagnose(repo_root=self.repo_root, config_path=self.config_path)
+        diagnose(repo_root=self.repo_root, config_path=self.config_path)
 
         after = capture_snapshot(self.test_dir)
         self.assertEqual(before, after)
 
-    def test_case_10_structured_report_serialization(self) -> None:
-        """Structured report serializes to clean JSON dict."""
+    def test_case_7_structured_report_serialization(self) -> None:
+        """Case 7: Structured report serializes to clean JSON dict."""
         report = diagnose(
             repo_root=self.repo_root,
             config_path=self.config_path,
-            state_path=self.state_path,
-            check_scheduler_task=False,
         )
         d = report.to_dict()
         self.assertEqual(d["status"], "HEALTHY")
         self.assertIsInstance(d["checks"], list)
-        self.assertEqual(len(d["checks"]), 4)
+        self.assertEqual(len(d["checks"]), 3)
+        self.assertEqual(
+            ["repository", "configuration", "runtime"],
+            [item["name"] for item in d["checks"]],
+        )
+
+    def test_case_8_removed_state_and_scheduler_checks_are_absent(self) -> None:
+        """Case 8: Diagnose no longer reports deduplication state or scheduler checks."""
+        report = diagnose(
+            repo_root=self.repo_root,
+            config_path=self.config_path,
+        )
+        names = [check.name for check in report.checks]
+        self.assertNotIn("state", names)
+        self.assertNotIn("scheduler", names)
+
+    def test_case_9_repository_check_requires_toolchain_and_config_only(self) -> None:
+        """Case 9: The repository check requires check_toolchain.py and wup_config.py only."""
+        check = check_repository(self.repo_root)
+        self.assertEqual(check.status, "HEALTHY")
+        self.assertEqual(check.details.get("missing", []), [])
+
+        (self.repo_root / "scripts" / "wup_config.py").unlink()
+        check = check_repository(self.repo_root)
+        self.assertEqual(check.status, "UNHEALTHY")
+        missing = {Path(item) for item in check.details["missing"]}
+        self.assertIn(Path("scripts") / "wup_config.py", missing)
+        self.assertNotIn(Path("scripts") / "run_notifier.py", missing)
+
+    def test_case_10_configuration_summary_omits_removed_notification_fields(self) -> None:
+        """Case 10: The configuration summary no longer exposes notification settings."""
+        check = check_configuration(self.config_path)
+        self.assertEqual(check.status, "HEALTHY")
+        self.assertNotIn("telegram_enabled", check.details)
+        self.assertNotIn("email_configured", check.details)
+        self.assertIn("tools_enabled", check.details)
 
 
 class TestDoctorCliContract(unittest.TestCase):
@@ -187,14 +170,14 @@ class TestDoctorCliContract(unittest.TestCase):
 
     def test_exit_codes_follow_existing_required_readiness(self):
         self.assertEqual(0, doctor_exit_code(DoctorReport("HEALTHY", [])))
-        self.assertEqual(0, doctor_exit_code(DoctorReport("DEGRADED", [DoctorCheck("scheduler", "DEGRADED", "optional")])))
+        self.assertEqual(0, doctor_exit_code(DoctorReport("DEGRADED", [DoctorCheck("runtime", "DEGRADED", "optional")])))
         self.assertEqual(1, doctor_exit_code(DoctorReport("UNHEALTHY", [])))
 
     def test_main_evaluates_once_and_keeps_unhealthy_diagnostics(self):
-        report = DoctorReport("UNHEALTHY", [DoctorCheck("state", "UNHEALTHY", "malformed")])
+        report = DoctorReport("UNHEALTHY", [DoctorCheck("configuration", "UNHEALTHY", "malformed")])
         out, err = io.StringIO(), io.StringIO()
         with patch("doctor.diagnose", return_value=report) as mocked, redirect_stdout(out), redirect_stderr(err):
-            self.assertEqual(1, main(["--json", "--skip-scheduler"]))
+            self.assertEqual(1, main(["--json"]))
         self.assertEqual(1, mocked.call_count)
         self.assertEqual("malformed", json.loads(out.getvalue())["checks"][0]["message"])
         self.assertEqual("", err.getvalue())
@@ -203,13 +186,21 @@ class TestDoctorCliContract(unittest.TestCase):
         report = DoctorReport("HEALTHY", [DoctorCheck("repository", "HEALTHY", "ok")])
         out = io.StringIO()
         with patch("doctor.diagnose", return_value=report), redirect_stdout(out):
-            self.assertEqual(0, main(["--skip-scheduler"]))
+            self.assertEqual(0, main([]))
         self.assertEqual(format_text_report(report) + "\n", out.getvalue())
         err = io.StringIO()
         with patch("doctor.diagnose", side_effect=RuntimeError("SECRET_TOKEN_ABC123")), redirect_stderr(err):
-            self.assertEqual(2, main(["--json", "--skip-scheduler"]))
+            self.assertEqual(2, main(["--json"]))
         self.assertEqual("WUP doctor could not complete.\n", err.getvalue())
         self.assertNotIn("SECRET_TOKEN_ABC123", err.getvalue())
+
+    def test_removed_cli_flags_are_rejected(self):
+        for flag in (["--state-path", "state.json"], ["--skip-scheduler"]):
+            with self.subTest(flag=flag):
+                with redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as raised:
+                        main(flag)
+                self.assertEqual(2, raised.exception.code)
 
     def test_parse_failure_sentinels_are_not_rendered(self):
         with patch("doctor.wup_config.load_config", side_effect=ValueError("SECRET_TOKEN_ABC123")):

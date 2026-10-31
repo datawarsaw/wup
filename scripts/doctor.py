@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,7 +43,6 @@ class DoctorReport:
 def check_repository(repo_root: Path) -> DoctorCheck:
     required_files = [
         Path("scripts/check_toolchain.py"),
-        Path("scripts/run_notifier.py"),
         Path("scripts/wup_config.py"),
     ]
     missing = [str(rel_path) for rel_path in required_files if not (repo_root / rel_path).is_file()]
@@ -81,8 +78,6 @@ def check_configuration(config_path: Path) -> DoctorCheck:
             "config_path": str(config_path),
             "present": True,
             "tools_enabled": len(config.get("tools", {}).get("enabled", [])),
-            "telegram_enabled": config.get("notifications", {}).get("telegram", {}).get("enabled", False),
-            "email_configured": bool(config.get("notifications", {}).get("email", {}).get("command")),
         }
         return DoctorCheck(
             name="configuration",
@@ -123,120 +118,18 @@ def check_runtime() -> DoctorCheck:
     )
 
 
-def check_state(state_path: Path) -> DoctorCheck:
-    if not state_path.exists():
-        return DoctorCheck(
-            name="state",
-            status="HEALTHY",
-            message=f"deduplication state not yet present (will baseline on first run): {state_path.name}",
-            details={"state_path": str(state_path), "present": False},
-        )
-
-    try:
-        content = state_path.read_text(encoding="utf-8")
-        data = json.loads(content)
-        if not isinstance(data, dict):
-            return DoctorCheck(
-                name="state",
-                status="UNHEALTHY",
-                message=f"state file {state_path.name} does not contain a JSON object",
-                details={"state_path": str(state_path)},
-            )
-        return DoctorCheck(
-            name="state",
-            status="HEALTHY",
-            message=f"state file is readable: {state_path.name}",
-            details={"state_path": str(state_path), "present": True, "version": data.get("version")},
-        )
-    except Exception as exc:
-        return DoctorCheck(
-            name="state",
-            status="UNHEALTHY",
-            message=f"unreadable or malformed state file {state_path.name}",
-            details={"state_path": str(state_path), "error": "parse_failure"},
-        )
-
-
-def check_scheduler() -> DoctorCheck:
-    if sys.platform != "win32":
-        return DoctorCheck(
-            name="scheduler",
-            status="HEALTHY",
-            message="scheduled task check skipped on non-Windows platform",
-        )
-
-    powershell = shutil.which("powershell") or shutil.which("pwsh")
-    if not powershell:
-        return DoctorCheck(
-            name="scheduler",
-            status="DEGRADED",
-            message="powershell not available to inspect scheduled tasks",
-        )
-
-    try:
-        cmd = [
-            powershell,
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(Get-ScheduledTask -TaskName 'WUP Toolchain Update Watch' -ErrorAction SilentlyContinue).State",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, check=False)
-        output = result.stdout.strip()
-        if result.returncode == 0 and output:
-            return DoctorCheck(
-                name="scheduler",
-                status="HEALTHY",
-                message=f"WUP scheduled task is present (State: {output})",
-                details={"task_name": "WUP Toolchain Update Watch", "state": output},
-            )
-        return DoctorCheck(
-                name="scheduler",
-                status="DEGRADED",
-                message="WUP scheduled task 'WUP Toolchain Update Watch' not found (optional)",
-                details={"task_name": "WUP Toolchain Update Watch", "present": False},
-        )
-    except Exception as exc:
-        return DoctorCheck(
-            name="scheduler",
-            status="DEGRADED",
-            message="scheduler inspection unavailable",
-            details={"error": "inspection_failure"},
-        )
-
-
 def diagnose(
     repo_root: Optional[Path] = None,
     config_path: Optional[Path] = None,
-    state_path: Optional[Path] = None,
-    check_scheduler_task: bool = True,
 ) -> DoctorReport:
     root = repo_root or REPO_ROOT
     cfg_path = config_path or (root / "wup.toml")
-
-    if state_path is None:
-        try:
-            cfg = wup_config.load_config(cfg_path)
-            custom_state_dir = cfg.get("local", {}).get("state_dir")
-            if custom_state_dir:
-                state_root = Path(custom_state_dir)
-            else:
-                state_root = Path(os.environ.get("WUP_STATE_DIR") or (Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "WUP"))
-            st_path = state_root / "last-alerted.json"
-        except Exception:
-            st_path = Path("last-alerted.json")
-    else:
-        st_path = state_path
 
     checks = [
         check_repository(root),
         check_configuration(cfg_path),
         check_runtime(),
-        check_state(st_path),
     ]
-
-    if check_scheduler_task:
-        checks.append(check_scheduler())
 
     if any(c.status == "UNHEALTHY" for c in checks):
         overall = "UNHEALTHY"
@@ -268,16 +161,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="path to configuration file")
     parser.add_argument("--repo-root", type=Path, help="path to repository root")
-    parser.add_argument("--state-path", type=Path, help="path to state file")
-    parser.add_argument("--skip-scheduler", action="store_true", help="skip Windows Task Scheduler inspection")
     parser.add_argument("--json", action="store_true", help="output report as JSON")
     args = parser.parse_args(argv)
     try:
         report = diagnose(
             repo_root=args.repo_root,
             config_path=args.config,
-            state_path=args.state_path,
-            check_scheduler_task=not args.skip_scheduler,
         )
         print(format_json_report(report) if args.json else format_text_report(report))
         return doctor_exit_code(report)

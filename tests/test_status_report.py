@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from status_report import load_report_data, main, render_status_html, write_status_report
+from status_report import main, render_status_html
 from status_snapshot import build_status_snapshot
 
 
